@@ -12,6 +12,7 @@ import {
   type PinnedDispatcherPolicy,
 } from "../infra/net/ssrf.js";
 import { loadUndiciRuntimeDeps } from "../infra/net/undici-runtime.js";
+import type { ResolvedHttpMcpTransportConfig } from "./mcp-transport-config.js";
 
 /** Default MCP HTTP fetch backed by lazy-loaded undici runtime deps. */
 const fetchWithUndici: FetchLike = async (url, init) =>
@@ -154,4 +155,24 @@ export function withSameOriginMcpHttpHeaders(params: {
     }
     return params.fetchFn(url, { ...(init as RequestInit), headers });
   };
+}
+
+/** OAuth discovery and token responses are short-lived, so the deadline covers their bodies. */
+export function buildMcpOAuthAuthorizationFetch(
+  config: ResolvedHttpMcpTransportConfig,
+  beforeRequest?: () => void,
+): FetchLike {
+  const fetchFn = buildMcpHttpFetch({
+    sslVerify: config.sslVerify,
+    clientCert: config.clientCert,
+    clientKey: config.clientKey,
+    resourceUrl: config.url,
+    timeoutMs: config.requestTimeoutMs,
+    beforeRequest,
+  });
+  return withSameOriginMcpHttpHeaders({
+    fetchFn,
+    headers: withoutMcpAuthorizationHeader(config.headers),
+    resourceUrl: config.url,
+  });
 }

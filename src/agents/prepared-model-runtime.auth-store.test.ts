@@ -1,6 +1,15 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ensureAuthProfileStoreWithoutExternalProfiles } from "./auth-profiles/store-runtime.js";
+import { getPreparedRuntimeAuthProfileStoreSnapshot } from "./auth-profiles/store.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { loadPreparedModelRuntimeAuthStore } from "./prepared-model-runtime.auth-store.js";
+
+vi.mock("./auth-profiles/store-runtime.js", () => ({
+  ensureAuthProfileStoreWithoutExternalProfiles: vi.fn(),
+}));
+vi.mock("./auth-profiles/store.js", () => ({
+  getPreparedRuntimeAuthProfileStoreSnapshot: vi.fn(),
+}));
 
 const input = {
   config: {},
@@ -9,6 +18,8 @@ const input = {
 };
 
 describe("prepared model runtime auth store", () => {
+  beforeEach(() => vi.resetAllMocks());
+
   it("retains durable OAuth when an external refresh publishes an empty overlay", () => {
     const durable: AuthProfileStore = {
       version: 1,
@@ -28,26 +39,22 @@ describe("prepared model runtime auth store", () => {
       runtimeExternalProfileIds: [],
       runtimeExternalProfileIdsAuthoritative: true,
     };
-    const loadDurable = vi.fn(() => durable);
+    vi.mocked(ensureAuthProfileStoreWithoutExternalProfiles).mockReturnValue(durable);
+    vi.mocked(getPreparedRuntimeAuthProfileStoreSnapshot).mockReturnValue(published);
 
-    const result = loadPreparedModelRuntimeAuthStore(input, {
-      loadDurable,
-      loadPublished: () => published,
-    });
+    const result = loadPreparedModelRuntimeAuthStore(input);
 
     expect(result?.profiles["openai:default"]).toEqual(durable.profiles["openai:default"]);
-    expect(loadDurable).toHaveBeenCalledOnce();
+    expect(ensureAuthProfileStoreWithoutExternalProfiles).toHaveBeenCalledOnce();
   });
 
   it("avoids durable reads when no external runtime overlay exists", () => {
-    const loadDurable = vi.fn(() => ({ version: 1, profiles: {} }));
+    vi.mocked(getPreparedRuntimeAuthProfileStoreSnapshot).mockReturnValue({
+      version: 1,
+      profiles: {},
+    });
 
-    expect(
-      loadPreparedModelRuntimeAuthStore(input, {
-        loadDurable,
-        loadPublished: () => ({ version: 1, profiles: {} }),
-      }),
-    ).toBeUndefined();
-    expect(loadDurable).not.toHaveBeenCalled();
+    expect(loadPreparedModelRuntimeAuthStore(input)).toBeUndefined();
+    expect(ensureAuthProfileStoreWithoutExternalProfiles).not.toHaveBeenCalled();
   });
 });

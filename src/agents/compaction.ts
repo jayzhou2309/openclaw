@@ -13,7 +13,6 @@ import {
   buildStageSplitPlanWithWorker,
   buildSummaryChunksWithWorker,
 } from "./compaction-planning-worker.js";
-import "./compaction-planning.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
 import { isTimeoutError } from "./failover-error.js";
 import type {

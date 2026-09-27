@@ -1,5 +1,3 @@
-import crypto from "node:crypto";
-import { ensureOwnerDisplaySecret } from "../agents/owner-display.js";
 import {
   readDeferredPluginMigrations,
   readDeferredPluginMigrationsAsync,
@@ -22,7 +20,6 @@ import { applyConfigEnvVars, cloneEnvWithPlatformSemantics } from "./config-env-
 import { ConfigIncludeError, ConfigIncludeReadError } from "./includes.js";
 import { isInvalidConfigError } from "./io.invalid-config.js";
 import { observeConfigSnapshot, observeConfigSnapshotSync } from "./io.observe.js";
-import { retainGeneratedOwnerDisplaySecret } from "./io.owner-display-secret.js";
 import {
   resolveConfigWidePluginMetadataSnapshot,
   resolveConfigWidePluginMetadataSnapshotAsync,
@@ -35,7 +32,6 @@ import {
   resolveConfigPathForDeps,
 } from "./io.read-helpers.js";
 import type { NormalizedConfigIoDeps } from "./io.read.types.js";
-import { autoOwnerDisplaySecretByPath } from "./io.state.js";
 import type {
   ConfigIoFactoryOptions,
   ConfigRecoveryCandidate,
@@ -213,19 +209,7 @@ export function createConfigIoContext(
         timeoutMs: cfg.env?.shellEnv?.timeoutMs ?? resolveShellEnvFallbackTimeoutMs(deps.env),
       });
     }
-    const pendingValue = autoOwnerDisplaySecretByPath.get(configPath);
-    const { config: resolvedConfig, generatedSecret } = ensureOwnerDisplaySecret(
-      cfg,
-      () => pendingValue ?? crypto.randomBytes(32).toString("hex"),
-    );
-    const finalized = applyConfigOverrides(
-      retainGeneratedOwnerDisplaySecret({
-        config: resolvedConfig,
-        configPath,
-        generatedSecret,
-        state: { pendingByPath: autoOwnerDisplaySecretByPath },
-      }),
-    );
+    const finalized = applyConfigOverrides(cfg);
     const inherited = inheritLegacyDefaultAgentId(cfg, finalized);
     copyConfigResolutionFacts(cfg, inherited);
     return inherited;
