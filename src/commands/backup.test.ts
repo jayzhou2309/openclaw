@@ -22,7 +22,7 @@ import {
   resolveBackupPlanFromDisk,
 } from "./backup-shared.js";
 import {
-  backupVerifyCommandMock,
+  verifyBackupArchiveMock,
   createMockTarStream,
   mockStateOnlyBackupPlan,
   resetBackupTempHome,
@@ -77,8 +77,8 @@ describe("backup commands", () => {
     await resetBackupTempHome(tempHome);
     backupWalkMock.mockReset();
     backupWalkMock.mockImplementation(() => createMockTarStream());
-    backupVerifyCommandMock.mockReset();
-    backupVerifyCommandMock.mockResolvedValue({
+    verifyBackupArchiveMock.mockReset();
+    verifyBackupArchiveMock.mockResolvedValue({
       ok: true,
       archivePath: "/tmp/fake.tar.gz",
       archiveRoot: "fake",
