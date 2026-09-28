@@ -16,7 +16,7 @@ import type { WorkerSessionPlacementDispatchIdentity } from "./placement-record.
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import { createPlacementTurnClaimOps } from "./placement-turn-claims.js";
 import { workerEnvironmentProjections } from "./store-projection.js";
-import { readWorkerEnvironmentFacts } from "./store-row-codec.js";
+import { queryWorkerEnvironmentStore, readWorkerEnvironmentFacts } from "./store-row-codec.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
 
 // Synchronous fault injection must remain in the transaction or callback under test.
@@ -282,14 +282,15 @@ export function createEnvironmentStoreFixture({
     credential,
     createIntent,
     fallbackPortRows: (environmentId: string) => {
-      return getDatabase()
-        .db.prepare(
-          `SELECT position, port
-           FROM worker_environment_ssh_fallback_ports
-           WHERE environment_id = ?
-           ORDER BY position`,
-        )
-        .all(environmentId);
+      const { db } = getDatabase();
+      return executeSqliteQuerySync(
+        db,
+        queryWorkerEnvironmentStore(db)
+          .selectFrom("worker_environment_ssh_fallback_ports")
+          .select(["position", "port"])
+          .where("environment_id", "=", environmentId)
+          .orderBy("position", "asc"),
+      ).rows;
     },
     seedBootstrapping: async (environmentId: string, leaseId: string) => {
       await createIntent(environmentId);
