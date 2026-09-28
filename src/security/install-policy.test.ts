@@ -240,10 +240,6 @@ describe("runInstallPolicy", () => {
             noOutputTimeout = () => callback(...args);
             return nativeSetTimeout(() => undefined, 60_000);
           }
-          // A slow runner can spend the whole overall deadline starting the process tree.
-          if (delay === 10_000) {
-            return nativeSetTimeout(() => undefined, 60_000);
-          }
           return nativeSetTimeout(callback, delay, ...args);
         });
 
