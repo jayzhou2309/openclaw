@@ -20,16 +20,14 @@ import {
   projectWorkerSessionTurnClaim,
   serializeWorkerSessionTurnClaim,
 } from "./placement-record.js";
-import type { PlacementRecoveryDeps } from "./placement-recovery-contract.js";
+import type {
+  PlacementRecoveryDeps,
+  WorkerPlacementRecoveryAdmission,
+} from "./placement-recovery-contract.js";
 import { WorkerRuntimeRefreshPendingError } from "./provider-runtime-refresh.js";
 import { boundedWorkerError } from "./worker-error.js";
 
 const log = createSubsystemLogger("gateway/worker-placement");
-
-export type WorkerPlacementRecoveryAdmission = (
-  sessionIds: readonly string[],
-  run: () => Promise<void>,
-) => Promise<boolean>;
 
 const admitRecovery: WorkerPlacementRecoveryAdmission = async (_sessionIds, run) => {
   await run();

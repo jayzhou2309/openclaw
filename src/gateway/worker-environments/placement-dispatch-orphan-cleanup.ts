@@ -1,5 +1,7 @@
-import type { WorkerPlacementRecoveryAdmission } from "./placement-dispatch-recovery.js";
-import type { PlacementRecoveryDeps } from "./placement-recovery-contract.js";
+import type {
+  PlacementRecoveryDeps,
+  WorkerPlacementRecoveryAdmission,
+} from "./placement-recovery-contract.js";
 import {
   cleanupWorkerWorkspaceResultRef,
   deleteWorkerWorkspaceResultCleanupRefs,
