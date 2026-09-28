@@ -13,12 +13,9 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
+import { nodeWorkerTurnMatchesIdentity } from "../worker/node-supervisor-identity.js";
 import type { NodeWorkerSupervisorIdentity } from "../worker/node-supervisor-protocol.js";
-import {
-  nodeWorkerTurnMatchesIdentity,
-  type NodeWorkerLaunchClaim,
-  type NodeWorkerTurnReceipt,
-} from "./node-worker-journal.types.js";
+import type { NodeWorkerLaunchClaim, NodeWorkerTurnReceipt } from "./node-worker-journal.types.js";
 import {
   isNodeWorkerTerminalState,
   type NodeWorkerLaunchReceipt,

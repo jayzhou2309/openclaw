@@ -4,7 +4,10 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as exec from "../process/exec.js";
-import { prepareWorkerGitHubEnvironment } from "./github-binding.runtime.js";
+import {
+  disposeWorkerGitHubEnvironment,
+  prepareWorkerGitHubEnvironment,
+} from "./github-binding.runtime.js";
 
 const { warn, inspectPathPermissions } = vi.hoisted(() => ({
   warn: vi.fn(),
@@ -317,6 +320,12 @@ describe("prepareWorkerGitHubEnvironment", () => {
     expect(JSON.stringify(prepared)).not.toContain(binding.token);
     expect(process.env.GH_TOKEN).toBe("inherited-synthetic-token");
     expect(process.env.GITHUB_TOKEN).toBe("inherited-synthetic-token");
+    const profileDir = prepared?.localIdentityEnv?.GH_CONFIG_DIR;
+    if (!profileDir) {
+      throw new Error("Expected a turn-owned GitHub profile");
+    }
+    await disposeWorkerGitHubEnvironment(path.join(root, "state"));
+    await expect(fs.access(profileDir)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("warns and continues without changing local files when origin cannot be fetched", async () => {

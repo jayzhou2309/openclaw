@@ -1,4 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { z } from "zod";
+import type { WorkerSlotSummary } from "../../packages/gateway-protocol/src/schema/environments.js";
 import { WORKER_BUNDLE_PREWARM_VERSION } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { parseWorkerSlotSummary } from "../shared/node-list-parse.js";
 
@@ -27,24 +29,37 @@ export const NODE_RUNNER_UPDATE_REQUIRED_ISSUE = {
 } as const;
 
 export type NodeRunnerInventoryIssue = typeof NODE_RUNNER_UPDATE_REQUIRED_ISSUE;
-export type NodeWorkerCapacitySnapshot = Readonly<{
-  total: number;
-  available: number;
-}>;
+export type NodeWorkerCapacitySnapshot = Readonly<WorkerSlotSummary>;
 
-export type NodeWorkerHostDeclaration =
-  | { enabled: false }
-  | {
-      enabled: true;
-      capacity: NodeWorkerCapacitySnapshot;
-      bundlePrewarm?: typeof WORKER_BUNDLE_PREWARM_VERSION;
-      bundleRetention?: typeof NODE_WORKER_BUNDLE_RETENTION_VERSION;
-      bundleStatus?: typeof NODE_WORKER_BUNDLE_STATUS_VERSION;
-      portalStream?: typeof NODE_WORKER_PORTAL_STREAM_VERSION;
-      environmentSession?: typeof NODE_WORKER_ENVIRONMENT_SESSION_VERSION;
-      preparedWorkspace?: typeof NODE_WORKER_PREPARED_WORKSPACE_VERSION;
-      capturedExecPolicy?: true;
-    };
+const WorkerHostDeclaration = z.union([
+  z.strictObject({ enabled: z.literal(false) }),
+  z
+    .strictObject({
+      enabled: z.literal(true),
+      capacity: z.transform((value, context) => {
+        const capacity = parseWorkerSlotSummary(value);
+        if (capacity) {
+          return capacity;
+        }
+        context.addIssue({ code: "custom", message: "invalid worker capacity" });
+        return z.NEVER;
+      }),
+      bundlePrewarm: z.literal(WORKER_BUNDLE_PREWARM_VERSION).optional(),
+      bundleRetention: z.literal(NODE_WORKER_BUNDLE_RETENTION_VERSION).optional(),
+      bundleStatus: z.literal(NODE_WORKER_BUNDLE_STATUS_VERSION).optional(),
+      portalStream: z.literal(NODE_WORKER_PORTAL_STREAM_VERSION).optional(),
+      environmentSession: z.literal(NODE_WORKER_ENVIRONMENT_SESSION_VERSION).optional(),
+      preparedWorkspace: z.literal(NODE_WORKER_PREPARED_WORKSPACE_VERSION).optional(),
+      capturedExecPolicy: z.literal(true).optional(),
+      idleRetention: z.literal(true).optional(),
+    })
+    .refine(
+      (host) =>
+        (host.bundleStatus === undefined || host.bundleRetention !== undefined) &&
+        (host.capacity.reclaimableIdle === undefined || host.idleRetention === true),
+    ),
+]);
+export type NodeWorkerHostDeclaration = z.infer<typeof WorkerHostDeclaration>;
 
 export type NodeRunnerInventoryDeclaration =
   | { protocolFeatures: readonly [] }
@@ -59,71 +74,14 @@ export type NodeRunnerInventoryDeclaration =
     };
 
 function parseWorkerHostDeclaration(value: unknown): NodeWorkerHostDeclaration | null {
-  if (!isRecord(value) || typeof value.enabled !== "boolean") {
+  if (!isRecord(value)) {
     return null;
   }
   const keys = Object.keys(value);
-  if (!value.enabled) {
-    return keys.length === 1 && keys[0] === "enabled" ? { enabled: false } : null;
-  }
-  const capacity = parseWorkerSlotSummary(value.capacity);
-  if (
-    !capacity ||
-    keys.length < 2 ||
-    keys.length > 9 ||
-    !keys.includes("enabled") ||
-    !keys.includes("capacity") ||
-    keys.some(
-      (key) =>
-        key !== "enabled" &&
-        key !== "capacity" &&
-        key !== "bundlePrewarm" &&
-        key !== "bundleRetention" &&
-        key !== "bundleStatus" &&
-        key !== "portalStream" &&
-        key !== "environmentSession" &&
-        key !== "preparedWorkspace" &&
-        key !== "capturedExecPolicy",
-    ) ||
-    (value.bundlePrewarm !== undefined && value.bundlePrewarm !== WORKER_BUNDLE_PREWARM_VERSION) ||
-    (value.bundleRetention !== undefined &&
-      value.bundleRetention !== NODE_WORKER_BUNDLE_RETENTION_VERSION) ||
-    (value.bundleStatus !== undefined &&
-      value.bundleStatus !== NODE_WORKER_BUNDLE_STATUS_VERSION) ||
-    (value.portalStream !== undefined &&
-      value.portalStream !== NODE_WORKER_PORTAL_STREAM_VERSION) ||
-    (value.environmentSession !== undefined &&
-      value.environmentSession !== NODE_WORKER_ENVIRONMENT_SESSION_VERSION) ||
-    (value.preparedWorkspace !== undefined &&
-      value.preparedWorkspace !== NODE_WORKER_PREPARED_WORKSPACE_VERSION) ||
-    (value.capturedExecPolicy !== undefined && value.capturedExecPolicy !== true) ||
-    (value.bundleStatus !== undefined && value.bundleRetention === undefined)
-  ) {
+  if (!keys.includes("enabled") || (value.enabled === true && !keys.includes("capacity"))) {
     return null;
   }
-  return {
-    enabled: true,
-    capacity,
-    ...(value.bundlePrewarm === WORKER_BUNDLE_PREWARM_VERSION
-      ? { bundlePrewarm: WORKER_BUNDLE_PREWARM_VERSION }
-      : {}),
-    ...(value.bundleRetention === NODE_WORKER_BUNDLE_RETENTION_VERSION
-      ? { bundleRetention: NODE_WORKER_BUNDLE_RETENTION_VERSION }
-      : {}),
-    ...(value.bundleStatus === NODE_WORKER_BUNDLE_STATUS_VERSION
-      ? { bundleStatus: NODE_WORKER_BUNDLE_STATUS_VERSION }
-      : {}),
-    ...(value.portalStream === NODE_WORKER_PORTAL_STREAM_VERSION
-      ? { portalStream: NODE_WORKER_PORTAL_STREAM_VERSION }
-      : {}),
-    ...(value.environmentSession === NODE_WORKER_ENVIRONMENT_SESSION_VERSION
-      ? { environmentSession: NODE_WORKER_ENVIRONMENT_SESSION_VERSION }
-      : {}),
-    ...(value.preparedWorkspace === NODE_WORKER_PREPARED_WORKSPACE_VERSION
-      ? { preparedWorkspace: NODE_WORKER_PREPARED_WORKSPACE_VERSION }
-      : {}),
-    ...(value.capturedExecPolicy === true ? { capturedExecPolicy: true } : {}),
-  };
+  return WorkerHostDeclaration.safeParse(value).data ?? null;
 }
 
 /** Parses the closed reconnect-scoped node-host runner declaration. */

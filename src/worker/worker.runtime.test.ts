@@ -73,7 +73,7 @@ import {
   WorkerConnectionStoppedError,
 } from "./worker-connection-contract.js";
 import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
-import { parseWorkerProcessResult, type WorkerProcessResult } from "./worker-process-protocol.js";
+import { parseWorkerProcessMessage, type WorkerProcessResult } from "./worker-process-protocol.js";
 import { WorkerInferenceProxyClient } from "./worker-rpc-inference-client.js";
 import { WorkerLiveEventClient } from "./worker-rpc-live-event-client.js";
 import { WorkerTranscriptCommitClient } from "./worker-rpc-transcript-client.js";
@@ -1757,8 +1757,8 @@ describe("worker runtime", () => {
       const output = new PassThrough();
       const results: WorkerProcessResult[] = [];
       output.on("data", (chunk: Buffer) => {
-        const result = parseWorkerProcessResult(JSON.parse(chunk.toString("utf8")));
-        if (result) {
+        const result = parseWorkerProcessMessage(JSON.parse(chunk.toString("utf8")));
+        if (result?.type === "result") {
           results.push(result);
         }
       });
@@ -2075,8 +2075,8 @@ describe("worker runtime", () => {
       const output = new PassThrough();
       const results: WorkerProcessResult[] = [];
       output.on("data", (chunk: Buffer) => {
-        const result = parseWorkerProcessResult(JSON.parse(chunk.toString("utf8")));
-        if (result) {
+        const result = parseWorkerProcessMessage(JSON.parse(chunk.toString("utf8")));
+        if (result?.type === "result") {
           results.push(result);
         }
       });

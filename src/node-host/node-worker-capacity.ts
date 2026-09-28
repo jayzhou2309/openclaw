@@ -1,3 +1,4 @@
+import { addAbortListener } from "node:events";
 import os from "node:os";
 import { NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE } from "../infra/node-commands.js";
 import {
@@ -55,6 +56,7 @@ export class NodeWorkerCapacity {
   private readonly closeAbort = new AbortController();
   private publishedCapacity: NodeWorkerCapacitySnapshot;
   private initialized = false;
+  private reclaimableIdle?: number;
 
   private updates: Promise<void> = Promise.resolve();
 
@@ -117,6 +119,7 @@ export class NodeWorkerCapacity {
     claim: NodeWorkerLaunchClaim,
     supervisor: NodeWorkerProcessIdentity,
     signal?: AbortSignal,
+    reclaimIdle?: () => Promise<boolean>,
   ): Promise<Exclude<NodeWorkerLaunchClaimResult, { action: "at-capacity" }>> {
     const deadlineMs = Date.now() + this.waitMs;
     const assertCurrent = () => {
@@ -137,6 +140,9 @@ export class NodeWorkerCapacity {
       });
       if (result.action !== "at-capacity") {
         return result;
+      }
+      if (await reclaimIdle?.()) {
+        continue;
       }
       await this.wait(deadlineMs, signal);
     }
@@ -173,6 +179,14 @@ export class NodeWorkerCapacity {
     this.wake();
   }
 
+  setReclaimableIdle(count: number): void {
+    this.reclaimableIdle = count;
+    this.publishCount(this.capacity - this.publishedCapacity.available);
+    if (count > 0) {
+      this.wake();
+    }
+  }
+
   private update<T>(operation: () => Promise<T>): Promise<T> {
     const pending = this.updates.then(operation);
     this.updates = pending.then(
@@ -184,10 +198,22 @@ export class NodeWorkerCapacity {
 
   private publishCount(nonterminalCount: number, force = false): void {
     const available = Math.max(0, this.capacity - nonterminalCount);
-    if (!force && this.publishedCapacity.available === available) {
+    const reclaimableIdle =
+      this.reclaimableIdle === undefined
+        ? undefined
+        : Math.min(this.reclaimableIdle, this.capacity - available);
+    if (
+      !force &&
+      this.publishedCapacity.available === available &&
+      this.publishedCapacity.reclaimableIdle === reclaimableIdle
+    ) {
       return;
     }
-    this.publishedCapacity = Object.freeze({ total: this.capacity, available });
+    this.publishedCapacity = Object.freeze({
+      total: this.capacity,
+      available,
+      ...(reclaimableIdle === undefined ? {} : { reclaimableIdle }),
+    });
     this.onCapacityChanged?.(this.publishedCapacity);
   }
 
@@ -228,25 +254,28 @@ export class NodeWorkerCapacity {
     if (this.closeAbort.signal.aborted) {
       throw new Error("node worker supervisor is closed");
     }
+    const waiting = signal
+      ? AbortSignal.any([signal, this.closeAbort.signal])
+      : this.closeAbort.signal;
     await new Promise<void>((resolve, reject) => {
-      const finish = (operation: () => void) => {
+      const wake = () => {
         clearTimeout(pollTimer);
         this.waiters.delete(wake);
-        signal?.removeEventListener("abort", onAbort);
-        this.closeAbort.signal.removeEventListener("abort", onClose);
-        operation();
+        listener[Symbol.dispose]();
+        if (waiting.aborted) {
+          reject(
+            this.closeAbort.signal.aborted
+              ? new Error("node worker supervisor is closed")
+              : capacityAbortReason(waiting),
+          );
+        } else {
+          resolve();
+        }
       };
-      const wake = () => finish(resolve);
-      const onAbort = () =>
-        finish(() =>
-          reject(signal ? capacityAbortReason(signal) : new Error("node worker admission aborted")),
-        );
-      const onClose = () => finish(() => reject(new Error("node worker supervisor is closed")));
       const pollTimer = setTimeout(wake, Math.min(CAPACITY_POLL_MS, remainingMs));
       pollTimer.unref?.();
+      const listener = addAbortListener(waiting, wake);
       this.waiters.add(wake);
-      signal?.addEventListener("abort", onAbort, { once: true });
-      this.closeAbort.signal.addEventListener("abort", onClose, { once: true });
     });
   }
 }

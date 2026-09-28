@@ -13,10 +13,8 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
-import {
-  parseNodeWorkerLaunchInput,
-  projectNodeWorkerSupervisorReceipt,
-} from "./node-worker-supervisor-contract.js";
+import { parseNodeWorkerLaunchInput } from "../worker/node-supervisor-protocol.js";
+import { projectNodeWorkerSupervisorReceipt } from "./node-worker-supervisor-contract.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import {
   TEST_WORKER_ENDPOINT,

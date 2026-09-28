@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import { NODE_WORKER_IDLE_RETENTION_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import { computeBackoff, sleepWithAbort } from "../../infra/backoff.js";
 import {
@@ -15,6 +16,7 @@ import {
   resolveNodeWorkerExecutionIssue,
 } from "../../infra/node-runner-inventory.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
+import { nodeWorkerTurnMatchesIdentity } from "../../worker/node-supervisor-identity.js";
 import {
   nodeWorkerPlanHash,
   parseNodeWorkerLaunchInput,
@@ -136,10 +138,15 @@ function rearmNodeWorkerLaunchInput(
 }
 
 export function measureNodeWorkerLaunchBytes(nodeId: string, input: NodeWorkerLaunchInput): number {
+  const measured = input.descriptor.admission.handshake.protocolFeatures.includes(
+    NODE_WORKER_IDLE_RETENTION_PROTOCOL_FEATURE,
+  )
+    ? { ...input, idleRetention: true as const }
+    : input;
   // Re-arms replace a UUID with a SHA-256 hex turn ID. Measure both without changing
   // the original plan; the registry bounds timeouts and always generates UUID request IDs.
   return Math.max(
-    ...[input, rearmNodeWorkerLaunchInput(input, 1)].flatMap((attempt) => [
+    ...[measured, rearmNodeWorkerLaunchInput(measured, 1)].flatMap((attempt) => [
       Buffer.byteLength(
         serializeNodeEvent(
           "node.invoke.request",
@@ -154,15 +161,12 @@ export function measureNodeWorkerLaunchBytes(nodeId: string, input: NodeWorkerLa
         ),
         "utf8",
       ),
-      measureWorkerProcessTurnBytes(attempt.descriptor),
+      measureWorkerProcessTurnBytes(attempt.descriptor, attempt.idleRetention),
     ]),
   );
 }
 
 function expectedIdentity(input: NodeWorkerLaunchInput): NodeWorkerSupervisorIdentity {
-  if (input.launchId !== input.descriptor.assignment.turnId) {
-    throw new Error("node worker launch ID must match the durable turn ID");
-  }
   return {
     launchId: input.launchId,
     planHash: nodeWorkerPlanHash(input),
@@ -172,21 +176,6 @@ function expectedIdentity(input: NodeWorkerLaunchInput): NodeWorkerSupervisorIde
     placementGeneration: input.placementGeneration,
     runId: input.descriptor.assignment.runId,
   };
-}
-
-function receiptMatchesIdentity(
-  receipt: NodeWorkerSupervisorReceipt,
-  expected: NodeWorkerSupervisorIdentity,
-): boolean {
-  return (
-    receipt.launchId === expected.launchId &&
-    receipt.planHash === expected.planHash &&
-    receipt.environmentId === expected.environmentId &&
-    receipt.sessionId === expected.sessionId &&
-    receipt.ownerEpoch === expected.ownerEpoch &&
-    receipt.placementGeneration === expected.placementGeneration &&
-    receipt.runId === expected.runId
-  );
 }
 
 function parseInvokeReceipt(
@@ -299,6 +288,8 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
     isAuthorized: () => boolean;
     deadline: OperationDeadline;
     onDispatchReady?: () => void;
+    idleRetention?: true;
+    prepareLaunch?: (node: NodeWorkerSupervisorNodeProof) => void;
   }): Promise<NodeWorkerSupervisorReceipt | null> => {
     if (!params.isAuthorized()) {
       throw new NodeWorkerLaunchTransportError(
@@ -334,6 +325,13 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
         deviceId: params.deviceId,
         signal,
       });
+      params.prepareLaunch?.(node);
+      if (!params.prepareLaunch && params.idleRetention && node.workerHost.idleRetention !== true) {
+        throw new NodeWorkerLaunchTransportError(
+          "PRIVATE_DIALECT_UNAVAILABLE",
+          "node worker idle retention is unavailable",
+        );
+      }
       if (
         params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND &&
         (node.workerHost.environmentSession !== NODE_WORKER_ENVIRONMENT_SESSION_VERSION ||
@@ -391,7 +389,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
     receipt: NodeWorkerSupervisorReceipt,
     expected: NodeWorkerSupervisorIdentity,
   ): NodeWorkerSupervisorReceipt => {
-    if (!receiptMatchesIdentity(receipt, expected)) {
+    if (!nodeWorkerTurnMatchesIdentity(receipt, expected)) {
       throw new Error("node worker supervisor receipt identity mismatch");
     }
     return receipt;
@@ -514,6 +512,24 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
               ? NODE_WORKER_SUPERVISOR_STATUS_COMMAND
               : NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
             payload: pollStatus ? { launchId: input.launchId } : input,
+            ...(!pollStatus && input.idleRetention ? { idleRetention: true as const } : {}),
+            ...(!pollStatus && !mayHaveLaunched
+              ? {
+                  prepareLaunch: (node: NodeWorkerSupervisorNodeProof) => {
+                    if (
+                      node.workerHost.idleRetention === true &&
+                      input.descriptor.admission.handshake.protocolFeatures.includes(
+                        NODE_WORKER_IDLE_RETENTION_PROTOCOL_FEATURE,
+                      )
+                    ) {
+                      input.idleRetention = true;
+                    } else {
+                      delete input.idleRetention;
+                    }
+                    expected = expectedIdentity(input);
+                  },
+                }
+              : {}),
             isAuthorized: () => {
               if (!dispatchReady) {
                 // Publish expiry through the signal; a guard throw can orphan the invoke promise.

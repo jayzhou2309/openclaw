@@ -7,7 +7,10 @@ import {
 import { supportsNodeWorkerProcessOwner } from "../process/supervisor/service-child-protocol.js";
 import { createServiceChildRelayAdapter } from "../process/supervisor/service-child-relay-host.js";
 import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
-import { parseNodeWorkerConnectionFailureMessage } from "../worker/node-supervisor-protocol.js";
+import {
+  parseNodeWorkerConnectionFailureMessage,
+  type NodeWorkerLaunchInput,
+} from "../worker/node-supervisor-protocol.js";
 import {
   buildWorkerProcessTurn,
   serializeWorkerProcessInput,
@@ -31,7 +34,6 @@ import {
   type NodeWorkerCredentialScrubber,
 } from "./node-worker-output.js";
 import type { NodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
-import type { NodeWorkerLaunchInput } from "./node-worker-supervisor-contract.js";
 
 export type NodeWorkerChildAdapter = AwaitedStdoutChildAdapter & {
   confirmExtinction?: () => boolean;
@@ -182,6 +184,7 @@ export async function startNodeWorkerLaunchTransport(params: {
   adapter: NodeWorkerChildAdapter;
   descriptor: WorkerLaunchDescriptor;
   container?: NodeWorkerContainerIdentity;
+  idleRetention?: boolean;
   isCurrent: () => boolean;
 }): Promise<void> {
   if (!params.isCurrent()) {
@@ -193,7 +196,10 @@ export async function startNodeWorkerLaunchTransport(params: {
   if (!params.isCurrent()) {
     throw new Error("node worker admission closed before descriptor dispatch");
   }
-  await sendNodeWorkerInput(params.adapter, buildWorkerProcessTurn(params.descriptor));
+  await sendNodeWorkerInput(
+    params.adapter,
+    buildWorkerProcessTurn(params.descriptor, params.idleRetention),
+  );
 }
 
 export async function sendNodeWorkerInput(

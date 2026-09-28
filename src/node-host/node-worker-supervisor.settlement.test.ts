@@ -4,123 +4,25 @@ import { WORKER_PUBLIC_INGRESS_PATH } from "../../packages/gateway-protocol/src/
 import { createDeferred } from "../../test/helpers/promise.js";
 import { toErrorObject } from "../infra/errors.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
-import { NodeWorkerCapacity } from "./node-worker-capacity.js";
-import { NodeWorkerContainerLifecycle } from "./node-worker-container-lifecycle.js";
-import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
-import { nodeWorkerTurnMatchesIdentity } from "./node-worker-journal.types.js";
-import { NodeWorkerLaunchStore, type NodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
+import { nodeWorkerTurnMatchesIdentity } from "../worker/node-supervisor-identity.js";
+import type { NodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
 import type { NodeWorkerChildAdapter } from "./node-worker-launch-transport.js";
 import type { NodeWorkerRunningChild } from "./node-worker-supervisor-ownership.js";
-import { createNodeWorkerLaunchRecovery } from "./node-worker-supervisor-recovery.js";
-import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
+import {
+  NodeWorkerCapacity,
+  NodeWorkerContainerLifecycle,
+  NodeWorkerJournalWorker,
+  NodeWorkerLaunchStore,
+  createNodeWorkerLaunchRecovery,
+  createNodeWorkerSupervisor,
+  mocks,
+} from "./node-worker-supervisor.mock.test-support.js";
 import {
   TEST_WORKER_ENDPOINT,
   testNodeWorkerLaunchIdentity,
   testWorkerLaunchInput,
 } from "./node-worker-supervisor.test-support.js";
-import type { NodeWorkerTurnReceipt, NodeWorkerTurnStore } from "./node-worker-turn-store.js";
-
-const mocks = vi.hoisted(() => ({
-  launchClaim: vi.fn<NodeWorkerLaunchStore["claim"]>(),
-  launchGet: vi.fn<NodeWorkerLaunchStore["get"]>(),
-  launchMatching: vi.fn<NodeWorkerLaunchStore["getMatching"]>(),
-  launchList: vi.fn<NodeWorkerLaunchStore["listNonterminal"]>(),
-  launchCount: vi.fn<NodeWorkerLaunchStore["nonterminalCount"]>(),
-  launchPrune: vi.fn<NodeWorkerLaunchStore["pruneExpiredTerminal"]>(),
-  launchRunning: vi.fn<NodeWorkerLaunchStore["markRunning"]>(),
-  launchFinish: vi.fn<NodeWorkerLaunchStore["finish"]>(),
-  launchCancelled: vi.fn<NodeWorkerLaunchStore["finishCancelled"]>(),
-  turnClaim: vi.fn<NodeWorkerTurnStore["claim"]>(),
-  turnGet: vi.fn<NodeWorkerTurnStore["get"]>(),
-  turnMatching: vi.fn<NodeWorkerTurnStore["getMatching"]>(),
-  turnFinish: vi.fn<NodeWorkerTurnStore["finish"]>(),
-  drain: vi.fn<NodeWorkerJournalWorker["drain"]>(async () => {}),
-  retain:
-    vi.fn<
-      typeof import("./node-worker-workspace.js").NodeWorkerWorkspaceRuntime.prototype.applyRetainSnapshot
-    >(),
-  inspectIdentity:
-    vi.fn<typeof import("./node-worker-process-identity.js").inspectNodeWorkerProcessIdentity>(),
-  inspectTree: vi.fn<typeof import("./node-worker-tree-control.js").inspectOwnedNodeWorkerTree>(),
-  remove:
-    vi.fn<
-      typeof import("./node-worker-container-lifecycle.js").NodeWorkerContainerLifecycle.prototype.remove
-    >(),
-  observe: vi.fn<typeof import("./node-worker-launch-observation.js").observeNodeWorkerChild>(),
-  prepare:
-    vi.fn<typeof import("./node-worker-launch-transport.js").prepareNodeWorkerLaunchTransport>(),
-  start: vi.fn<typeof import("./node-worker-launch-transport.js").startNodeWorkerLaunchTransport>(),
-  send: vi.fn<typeof import("./node-worker-launch-transport.js").sendNodeWorkerInput>(),
-}));
-
-vi.mock("./node-worker-journal-worker.js", () => ({
-  NodeWorkerJournalWorker: class {
-    drain = mocks.drain;
-  },
-}));
-vi.mock("./node-worker-launch-store.js", () => ({
-  NodeWorkerLaunchStore: class {
-    claim = mocks.launchClaim;
-    get = mocks.launchGet;
-    getMatching = mocks.launchMatching;
-    listNonterminal = mocks.launchList;
-    nonterminalCount = mocks.launchCount;
-    pruneExpiredTerminal = mocks.launchPrune;
-    markRunning = mocks.launchRunning;
-    finish = mocks.launchFinish;
-    finishCancelled = mocks.launchCancelled;
-  },
-}));
-vi.mock("./node-worker-turn-store.js", () => ({
-  NodeWorkerTurnStore: class {
-    claim = mocks.turnClaim;
-    get = mocks.turnGet;
-    getMatching = mocks.turnMatching;
-    finish = mocks.turnFinish;
-  },
-}));
-vi.mock("./node-worker-container-lifecycle.js", () => ({
-  NodeWorkerContainerLifecycle: class {
-    initialize = async () => {};
-    inspect = async () => "live";
-    remove = mocks.remove;
-  },
-}));
-vi.mock("./node-worker-workspace.js", () => ({
-  NodeWorkerWorkspaceRuntime: class {
-    acquirePreparedWorkspace = () => undefined;
-    applyRetainSnapshot = mocks.retain;
-    processes = {
-      hasActiveWork: () => false,
-      stopEnvironment: async () => {},
-      close: async () => {},
-    };
-  },
-}));
-vi.mock("./node-worker-process-identity.js", () => ({
-  requireNodeWorkerProcessIdentity: () => ({ pid: 101, startTime: 1 }),
-  inspectNodeWorkerProcessIdentity: mocks.inspectIdentity,
-}));
-vi.mock("./node-worker-tree-control.js", () => {
-  const unexpected = () => {
-    throw new Error("Process-tree control is outside this pure fixture");
-  };
-  return {
-    inspectOwnedNodeWorkerTree: mocks.inspectTree,
-    signalOwnedNodeWorkerTree: unexpected,
-    signalOwnedNodeWorkerAnchor: unexpected,
-    stopOwnedNodeWorkerTree: unexpected,
-    waitForOwnedNodeWorkerTreeDeath: unexpected,
-  };
-});
-vi.mock("./node-worker-launch-observation.js", () => ({
-  observeNodeWorkerChild: mocks.observe,
-}));
-vi.mock("./node-worker-launch-transport.js", () => ({
-  prepareNodeWorkerLaunchTransport: mocks.prepare,
-  startNodeWorkerLaunchTransport: mocks.start,
-  sendNodeWorkerInput: mocks.send,
-}));
+import type { NodeWorkerTurnReceipt } from "./node-worker-turn-store.js";
 
 afterEach(() => vi.resetAllMocks());
 
@@ -569,7 +471,10 @@ function recoveryFixture(container = false) {
   mocks.launchGet.mockImplementation(async () => receipt);
   mocks.launchMatching.mockImplementation(async () => receipt);
   mocks.launchCount.mockImplementation(async () => (receipt.state === "running" ? 1 : 0));
-  const finish: NodeWorkerLaunchStore["finish"] = async (params, authority) => {
+  const finish: InstanceType<typeof NodeWorkerLaunchStore>["finish"] = async (
+    params,
+    authority,
+  ) => {
     authority?.assertCurrent();
     receipt = { ...receipt, state: params.state };
     return receipt;

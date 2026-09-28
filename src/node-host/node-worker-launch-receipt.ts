@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
+import type { NodeWorkerSupervisorIdentity } from "../worker/node-supervisor-protocol.js";
 import type { NodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
 
 type NodeWorkerLaunchState =
@@ -34,15 +35,8 @@ export type NodeWorkerLaunchRow = Selectable<OpenClawStateDatabase["node_worker_
   lineage_settled?: number | null;
 };
 
-export type NodeWorkerLaunchReceipt = {
-  launchId: string;
-  planHash: string;
+export type NodeWorkerLaunchReceipt = NodeWorkerSupervisorIdentity & {
   gatewayNamespace: string;
-  environmentId: string;
-  sessionId: string;
-  ownerEpoch: number;
-  placementGeneration: number;
-  runId: string;
   state: NodeWorkerLaunchState;
   supervisor: NodeWorkerProcessIdentity;
   worker: NodeWorkerProcessIdentity | null;
