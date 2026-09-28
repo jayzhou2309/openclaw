@@ -20,7 +20,7 @@ import {
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 const options = { timeout: 300_000 };
 const command = "Command to run:\n- command: python3 scripts/check_mail.py";
-const policy: CronStoredJob["scheduledToolPolicy"] = {
+const policy: NonNullable<CronStoredJob["scheduledToolPolicy"]> = {
   version: 1,
   mode: "account",
   ownerSessionKey: "agent:main:whatsapp:group:team",
