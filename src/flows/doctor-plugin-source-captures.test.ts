@@ -228,7 +228,7 @@ it.each([
 it.each([
   { identity: "unrelated", removed: true },
   { identity: "openclaw", removed: false },
-  { identity: "unclassified", removed: true },
+  { identity: "unclassified", removed: false },
   { identity: "foreign-bun", removed: true },
   { identity: "foreign-node", removed: true },
   { identity: "capture-bun", removed: false },
@@ -242,7 +242,9 @@ it.each([
     write(
       app,
       "package.json",
-      identity === "unclassified" ? "{" : JSON.stringify({ name: identity }),
+      identity === "unclassified"
+        ? "{"
+        : JSON.stringify({ name: identity, scripts: { start: "node dist/index.js" } }),
     );
     const file = write(systemTmp, "openclaw-plugin-build-legacy/source.cjs", "capture");
     inspectAsLaterProcess();
@@ -276,7 +278,9 @@ it.each([
         ? "Removed 1 legacy plugin capture root(s)"
         : identity === "cwd-unavailable"
           ? `Could not classify PID ${peer}: working directory is unavailable`
-          : `PIDs: ${peer}`,
+          : identity === "unclassified"
+            ? "package identity"
+            : `PIDs: ${peer}`,
     );
     if (identity === "unclassified") {
       expect(output).not.toContain("Other OpenClaw processes are still running");

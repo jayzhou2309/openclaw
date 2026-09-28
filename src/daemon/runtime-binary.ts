@@ -26,18 +26,21 @@ export function isBunRuntime(execPath: string): boolean {
   return base === "bun" || base === "bun.exe";
 }
 
-const RUNTIME_VALUE_OPTIONS = new Set([
+const RUNTIME_MODULE_OPTIONS = new Set([
   "-r",
-  "-C",
-  "--env-file",
-  "--env-file-if-exists",
-  "--tsconfig",
-  "--cwd",
   "--preload",
   "--require",
   "--import",
   "--loader",
   "--experimental-loader",
+]);
+const RUNTIME_VALUE_OPTIONS = new Set([
+  ...RUNTIME_MODULE_OPTIONS,
+  "-C",
+  "--env-file",
+  "--env-file-if-exists",
+  "--tsconfig",
+  "--cwd",
   "--conditions",
   "--icu-data-dir",
   "--openssl-config",
@@ -58,14 +61,49 @@ const RUNTIME_BOOLEAN_OPTIONS = new Set([
   "--bun",
 ]);
 
-export function resolveRuntimeScriptPosition(
-  args: string[],
-): number | { kind: "not-runtime" } | { kind: "other" } | { kind: "unclassified"; reason: string } {
+function attachedRuntimeModuleReference(arg: string): string | undefined {
+  return arg.startsWith("-r") && !arg.startsWith("--") && arg.length > 2 ? arg.slice(2) : undefined;
+}
+
+/** Keep module-loading operands distinct from ordinary runtime option values. */
+export function readRuntimeOptionOperands(
+  args: readonly string[],
+  endIndex: number,
+): Array<{ index: number; value: string; loadsModule: boolean }> {
+  const operands: Array<{ index: number; value: string; loadsModule: boolean }> = [];
+  for (let index = 1; index < endIndex; index++) {
+    const arg = args[index]!;
+    if (arg === "--") {
+      break;
+    }
+    const equals = arg.indexOf("=");
+    const option = equals < 0 ? arg : arg.slice(0, equals);
+    const attached = attachedRuntimeModuleReference(arg);
+    if (attached !== undefined) {
+      operands.push({ index, value: attached, loadsModule: true });
+    } else if (RUNTIME_VALUE_OPTIONS.has(option)) {
+      const value = equals < 0 ? (args[++index] ?? "") : arg.slice(equals + 1);
+      operands.push({ index, value, loadsModule: RUNTIME_MODULE_OPTIONS.has(option) });
+    }
+  }
+  return operands;
+}
+
+export function resolveRuntimeScriptPosition(args: string[]):
+  | number
+  | { kind: "not-runtime" }
+  | { kind: "other" }
+  | {
+      kind: "unclassified";
+      reason: string;
+      index: number;
+      pendingSubcommand?: "run" | "watch";
+    } {
   const executable = args[0] ?? "";
   const basename = executable.replaceAll("\\", "/").trim().toLowerCase().split("/").at(-1);
   const bun = isBunRuntime(executable);
   const tsx = basename === "tsx" || basename === "tsx.cmd";
-  let consumedSubcommand = false;
+  let pendingSubcommand: "run" | "watch" | undefined = bun ? "run" : tsx ? "watch" : undefined;
   if (!isNodeRuntime(executable) && !bun && !tsx) {
     return { kind: "not-runtime" };
   }
@@ -84,7 +122,9 @@ export function resolveRuntimeScriptPosition(
     ) {
       return { kind: "other" };
     }
-    if (RUNTIME_VALUE_OPTIONS.has(arg)) {
+    if (attachedRuntimeModuleReference(arg) !== undefined) {
+      continue;
+    } else if (RUNTIME_VALUE_OPTIONS.has(arg)) {
       index++;
     } else if (arg.startsWith("-")) {
       // A negated spelling proves a boolean; its absence never proves a value option.
@@ -97,9 +137,14 @@ export function resolveRuntimeScriptPosition(
       ) {
         continue;
       }
-      return { kind: "unclassified", reason: `unsupported runtime option ${arg}` };
-    } else if (!consumedSubcommand && ((bun && arg === "run") || (tsx && arg === "watch"))) {
-      consumedSubcommand = true;
+      return {
+        kind: "unclassified",
+        reason: `unsupported runtime option ${arg}`,
+        index,
+        pendingSubcommand,
+      };
+    } else if (arg === pendingSubcommand) {
+      pendingSubcommand = undefined;
       continue;
     } else {
       return index;

@@ -87,6 +87,15 @@ describe("OpenClaw process owners", () => {
   it("rejects an unrelated process", () => {
     expect(classifyOpenClawArgv(["python", "worker.py"]).kind).toBe("other");
   });
+
+  it.each([undefined, "gateway"])(
+    "rejects a standalone foreign script for command %s despite missing package identity",
+    (command) => {
+      const other = scriptFixture("service.js", "unrelated-service");
+      fs.unlinkSync(path.join(other.root, "package.json"));
+      expect(classifyOpenClawArgv(["node", other.script], { command }).kind).toBe("other");
+    },
+  );
 });
 
 describe("classifyOpenClawArgv", () => {
@@ -132,6 +141,7 @@ describe("classifyOpenClawArgv", () => {
     });
     expect(classifyOpenClawArgv(["bun", "run", "run", owned.script], { cwd: other.root })).toEqual({
       kind: "other",
+      packageIdentity: expect.objectContaining({ kind: "foreign" }),
     });
   });
 
@@ -148,7 +158,10 @@ describe("classifyOpenClawArgv", () => {
       kind: "openclaw",
       entryIndex: 1,
     });
-    expect(classifyOpenClawArgv(["node", entry], { cwd: other.root })).toEqual({ kind: "other" });
+    expect(classifyOpenClawArgv(["node", entry], { cwd: other.root })).toEqual({
+      kind: "other",
+      packageIdentity: expect.objectContaining({ kind: "foreign" }),
+    });
     expect(
       classifyOpenClawArgv(["node", other.script, "gateway"], { command: "gateway" }).kind,
     ).toBe("other");
@@ -159,10 +172,14 @@ describe("classifyOpenClawArgv", () => {
     const other = scriptFixture("app.js", "unrelated-service");
     expect(
       classifyOpenClawArgv(["node", "--import", owned.script, other.script, owned.script]),
-    ).toEqual({ kind: "other" });
-    expect(classifyOpenClawArgv(["node", "--eval", "0", owned.script])).toEqual({ kind: "other" });
+    ).toEqual({ kind: "other", packageIdentity: expect.objectContaining({ kind: "foreign" }) });
+    expect(classifyOpenClawArgv(["node", "--eval", "0", owned.script])).toEqual({
+      kind: "other",
+      packageIdentity: { kind: "not-inspected" },
+    });
     expect(classifyOpenClawArgv(["node", other.script, "/opt/openclaw/openclaw.mjs"])).toEqual({
       kind: "other",
+      packageIdentity: expect.objectContaining({ kind: "foreign" }),
     });
     expect(
       classifyOpenClawArgv(["node", "--import", "loader.js", "--no-warnings", owned.script]),
@@ -173,6 +190,7 @@ describe("classifyOpenClawArgv", () => {
     });
     expect(classifyOpenClawArgv(["node", "--cpu-prof-name", owned.script, other.script])).toEqual({
       kind: "other",
+      packageIdentity: expect.objectContaining({ kind: "foreign" }),
     });
   });
 
@@ -180,11 +198,13 @@ describe("classifyOpenClawArgv", () => {
     const owned = scriptFixture("dist/index.js");
     expect(classifyOpenClawArgv(["node", "dist/index.js"])).toEqual({
       kind: "unclassified",
+      cause: "cwd",
       reason: expect.stringContaining("working directory"),
     });
     fs.unlinkSync(owned.script);
     expect(classifyOpenClawArgv(["node", owned.script])).toEqual({
       kind: "unclassified",
+      cause: "script",
       reason: expect.stringContaining("resolve script"),
     });
     expect(
@@ -198,11 +218,13 @@ describe("classifyOpenClawArgv", () => {
     fs.writeFileSync(manifest, "{");
     expect(classifyOpenClawArgv(["node", owned.script])).toEqual({
       kind: "unclassified",
+      cause: "package-identity",
       reason: expect.stringContaining("package identity"),
     });
     fs.unlinkSync(manifest);
     expect(classifyOpenClawArgv(["node", owned.script])).toEqual({
       kind: "unclassified",
+      cause: "package-identity",
       reason: expect.stringContaining("package identity"),
     });
   });
@@ -218,6 +240,7 @@ describe("classifyOpenClawArgv", () => {
     });
     expect(classifyOpenClawArgv(["node", other.script], { additionalEntrypoints })).toEqual({
       kind: "other",
+      packageIdentity: expect.objectContaining({ kind: "foreign" }),
     });
   });
 });
