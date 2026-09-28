@@ -101,12 +101,19 @@ it("preserves a retained runtime used by an orphaned eval worker", () => {
   expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [peer] });
 });
 
-it("does not turn an unavailable cwd into custody when argv is readable", () => {
-  rows.set(peer, { ppid: 1, argv: ["node", "dist/index.js"] });
+it.each([
+  ["node", "dist/index.js"],
+  ["bun", "run", "--silent", "start"],
+])("preserves the cleanup veto when cwd is unavailable for %j", (...argv) => {
+  rows.set(peer, { ppid: 1, argv });
   readlink.mockImplementation(() => {
     throw Object.assign(new Error("permission denied"), { code: "EACCES" });
   });
-  expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [] });
+  expect(inspectOtherOpenClawProcesses()).toEqual({
+    error: expect.stringContaining(
+      `Could not classify PID ${peer}: working directory is unavailable`,
+    ),
+  });
 });
 
 it.each([
@@ -162,6 +169,8 @@ it.each([
   ["node", "--foreign-runtime-option", "/tmp/openclaw-update-runtime-Ab1234/script.js"],
   ["bun", "run", "--silent", "start", "--config=openclaw-plugin-build-abc123/config.json"],
   ["node", "--foreign-runtime-option", "--runtime=openclaw-update-runtime-Ab1234/script.js"],
+  ["bun", "run", "--silent", "/app/openclaw.mjs"],
+  ["bun", "run", "--silent", "/app/dist/index.js"],
   ["node", "openclaw-plugin-build-abc123/script.js"],
   ["node", "/tmp/openclaw-model-catalog-abc123/worker.cjs"],
 ])("recognizes live command identity %j", (...argv) => {
@@ -295,4 +304,34 @@ it("retains Darwin cwd holders from one partial batch without trusting other PID
   darwinCommand.mockImplementation((pid: number) => ({ argv: rows.get(pid)!.argv }));
   expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [peer] });
   expect(census.mock.calls.filter(([command]) => command.endsWith("lsof"))).toHaveLength(1);
+});
+
+it.each([
+  { script: "dist/index.js", blocked: true },
+  { script: "/unrelated-app/dist/index.js", blocked: false },
+])("handles a cwd batch timeout for $script without guessing custody", ({ script, blocked }) => {
+  mockProcessPlatform("darwin");
+  rows.set(peer, { ppid: 1, argv: ["node", script] });
+  census.mockImplementation((command: string) =>
+    command.endsWith("lsof")
+      ? {
+          status: null,
+          error: Object.assign(new Error("timed out"), { code: "ETIMEDOUT" }),
+          stdout: "",
+        }
+      : {
+          status: 0,
+          stdout: [...rows].map(([pid, row]) => `${pid} ${self} S ${row.ppid} 501`).join("\n"),
+        },
+  );
+  darwinCommand.mockImplementation((pid: number) => ({ argv: rows.get(pid)!.argv }));
+  expect(inspectOtherOpenClawProcesses()).toEqual(
+    blocked
+      ? {
+          error: expect.stringContaining(
+            `Could not classify PID ${peer}: working directory is unavailable`,
+          ),
+        }
+      : { pids: [] },
+  );
 });

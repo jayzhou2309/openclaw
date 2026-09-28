@@ -232,6 +232,7 @@ it.each([
   { identity: "foreign-bun", removed: true },
   { identity: "foreign-node", removed: true },
   { identity: "capture-bun", removed: false },
+  { identity: "cwd-unavailable", removed: false },
 ])(
   "uses the real census before reclamation with an $identity entrypoint",
   async ({ identity, removed }) => {
@@ -250,8 +251,16 @@ it.each([
       ? ["bun", "run", "--silent", identity === "capture-bun" ? file : "start"]
       : identity === "foreign-node"
         ? ["node", "--foreign-runtime-option", script]
-        : ["node", script];
-    ps.mockReturnValue({ status: 0, stdout: `p${peer}\0ncwd-unrelated\0` });
+        : ["node", identity === "cwd-unavailable" ? "dist/index.js" : script];
+    ps.mockReturnValue(
+      identity === "cwd-unavailable"
+        ? {
+            status: null,
+            error: Object.assign(new Error("timed out"), { code: "ETIMEDOUT" }),
+            stdout: "",
+          }
+        : { status: 0, stdout: `p${peer}\0n${app}\0` },
+    );
     processMembers.mockReturnValue([
       { pid: process.pid, state: "S", command: { ppid: 0, argv: ["openclaw-doctor"] } },
       { pid: peer, state: "S", command: { ppid: 0, argv } },
@@ -262,7 +271,13 @@ it.each([
     census.mockImplementation(actual.inspectOtherOpenClawProcesses);
     const output = await duringMaintenance(() => runCaptureReport(true));
     expect(fs.existsSync(file)).toBe(!removed);
-    expect(output).toContain(removed ? "Removed 1 legacy plugin capture root(s)" : `PIDs: ${peer}`);
+    expect(output).toContain(
+      removed
+        ? "Removed 1 legacy plugin capture root(s)"
+        : identity === "cwd-unavailable"
+          ? `Could not classify PID ${peer}: working directory is unavailable`
+          : `PIDs: ${peer}`,
+    );
     if (identity === "unclassified") {
       expect(output).not.toContain("Other OpenClaw processes are still running");
     }

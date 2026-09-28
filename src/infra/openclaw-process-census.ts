@@ -1,11 +1,16 @@
 import path from "node:path";
+import { resolveRuntimeScriptPosition } from "../daemon/runtime-binary.js";
 import { isLegacyPluginSourceCaptureName } from "../plugins/plugin-source-capture-path.js";
 import { readDarwinProcessCommand } from "../process/supervisor/darwin-process-command.js";
 import { readProcessGroupMembers } from "../process/supervisor/service-child-group-ownership.js";
 import { isPidDefinitelyDead } from "../shared/pid-alive.js";
 import { getRootOptionAwareCommandPath } from "./cli-root-options.js";
 import { isContainerEnvironment } from "./container-environment.js";
-import { classifyOpenClawArgv, readProcessWorkingDirectories } from "./gateway-process-argv.js";
+import {
+  classifyOpenClawArgv,
+  classifyOpenClawEntrypointPath,
+  readProcessWorkingDirectories,
+} from "./gateway-process-argv.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 
 const workerEntrypoints = Object.values(runtimeProcessEntrypoints).flatMap((entry) => [
@@ -84,17 +89,43 @@ export function inspectOtherOpenClawProcesses(): { pids: number[] } | { error: s
         if (command.argv.some(referencesRetainedArtifact)) {
           return true;
         }
+        const cwd = directories.get(pid);
         const identity = classifyOpenClawArgv(command.argv, {
           pid,
-          cwd: directories.get(pid) ?? "",
+          cwd: cwd ?? "",
           serviceMarker: command.serviceMarker,
           additionalEntrypoints: workerEntrypoints,
         });
-        // Readable but unfamiliar argv is not custody. Unreadable argv already
-        // fails in the census reader; any process can hold a capture through cwd.
-        return (
-          identity.kind === "openclaw" || referencesRetainedArtifact(directories.get(pid) ?? "")
-        );
+        if (
+          identity.kind === "openclaw" ||
+          referencesRetainedArtifact(cwd ?? "") ||
+          (identity.kind === "unclassified" &&
+            command.argv.some(
+              (arg) =>
+                classifyOpenClawEntrypointPath(arg, {
+                  cwd: cwd ?? "",
+                  additionalEntrypoints: workerEntrypoints,
+                }).kind === "openclaw",
+            ))
+        ) {
+          return true;
+        }
+        if (command.argv.length > 0 && (!cwd || !path.isAbsolute(cwd))) {
+          const position = resolveRuntimeScriptPosition(command.argv);
+          const entrypoint =
+            typeof position === "number"
+              ? command.argv[position]
+              : position.kind === "not-runtime"
+                ? command.argv[0]
+                : undefined;
+          // Unfamiliar syntax is not custody, but missing cwd cannot resolve a relative entrypoint.
+          if (!entrypoint || !path.isAbsolute(entrypoint)) {
+            throw new Error(
+              `Could not classify PID ${pid}: working directory is unavailable for its entrypoint.`,
+            );
+          }
+        }
+        return false;
       })
       .map(({ pid }) => pid);
     return { pids };

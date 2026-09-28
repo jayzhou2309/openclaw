@@ -120,10 +120,18 @@ function classifyEntrypoint(
   if (typeof entryIndex !== "number") {
     return entryIndex.kind === "not-runtime" ? { kind: "other" } : entryIndex;
   }
-  const script = args[entryIndex]!;
+  const identity = classifyOpenClawEntrypointPath(args[entryIndex]!, opts);
+  return identity.kind === "openclaw" ? { ...identity, entryIndex } : identity;
+}
+
+/** Path evidence is shared with cleanup even when launcher syntax is unfamiliar. */
+export function classifyOpenClawEntrypointPath(
+  script: string,
+  opts: Pick<ClassificationOptions, "cwd" | "pid" | "additionalEntrypoints" | "requirePackageIdentity"> = {},
+): OpenClawArgvClassification {
   const normalized = normalizeProcArg(script);
   if (!opts.requirePackageIdentity && /(?:^|\/)openclaw\.mjs$/.test(normalized)) {
-    return { kind: "openclaw", entryIndex };
+    return { kind: "openclaw" };
   }
   const entrypoints = [...ENTRY_CANDIDATES, ...(opts.additionalEntrypoints ?? [])];
   let scriptPath = script;
@@ -162,7 +170,6 @@ function classifyEntrypoint(
   return isRecord(manifest) && manifest.name === "openclaw"
     ? {
         kind: "openclaw",
-        entryIndex,
         ...(opts.requirePackageIdentity
           ? { packageIdentity: { root: path.resolve(root), entrypoint: resolved } }
           : {}),
