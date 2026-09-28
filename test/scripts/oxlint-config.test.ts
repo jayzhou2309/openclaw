@@ -15,7 +15,6 @@ const sourceProjectOwners = [
   "gateway",
   "infra",
   "commands",
-  "plugins",
   "config",
   "cli",
   "auto-reply",
