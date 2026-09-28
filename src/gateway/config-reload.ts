@@ -32,6 +32,7 @@ import {
 } from "../config/source.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { hashStableJson } from "../plugins/installed-plugin-index-hash.js";
 import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
@@ -102,6 +103,7 @@ function isConfigReloadSuperseded(error: unknown): boolean {
 }
 
 export function startGatewayConfigReloader(opts: {
+  scheduler: GatewayScheduler;
   initialConfig: OpenClawConfig;
   initialCompareConfig?: OpenClawConfig;
   initialSnapshotRawHash: string | null;
@@ -210,7 +212,7 @@ export function startGatewayConfigReloader(opts: {
   const resolveSettings = (config: OpenClawConfig) =>
     resolveGatewayReloadSettings(config, opts.testDebounceMs);
   let settings = resolveSettings(currentConfig);
-  let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  let reloadJob: GatewayScheduledJob | null = null;
   let leaseRetryDelayMs = 0;
   let pending = false;
   let running = false;
@@ -340,21 +342,20 @@ export function startGatewayConfigReloader(opts: {
   });
 
   const clearReloadTimer = () => {
-    if (debounceTimer) {
-      clearTimeout(debounceTimer);
-    }
-    debounceTimer = null;
+    reloadJob?.cancel();
+    reloadJob = null;
   };
   const scheduleAfter = (wait: number) => {
-    if (stopped || !initialized) {
+    if (stopped || !initialized || opts.scheduler.signal.aborted) {
       return;
     }
     // Coalesce filesystem/write-listener bursts into one reload pass. Config
     // writes often touch temp and final paths in quick succession.
-    if (debounceTimer) {
-      clearTimeout(debounceTimer);
-    }
-    debounceTimer = setTimeout(startTrackedReload, Math.max(wait, leaseRetryDelayMs));
+    reloadJob = opts.scheduler.schedule({
+      id: "config:reload",
+      delayMs: Math.max(wait, leaseRetryDelayMs),
+      run: startTrackedReload,
+    });
   };
   const schedule = () => {
     scheduleAfter(pendingInProcessConfig ? 0 : settings.debounceMs);
@@ -1151,7 +1152,7 @@ export function startGatewayConfigReloader(opts: {
     );
   }
 
-  function startTrackedReload(): void {
+  function startTrackedReload(): void | Promise<void> {
     if (stopped || !initialized) {
       return;
     }
@@ -1199,6 +1200,7 @@ export function startGatewayConfigReloader(opts: {
         schedule();
       }
     });
+    return reload;
   }
 
   const applyPluginLifecycleChange: PluginLifecycleRuntimeApply = (params) => {
@@ -1222,7 +1224,7 @@ export function startGatewayConfigReloader(opts: {
       }
       running = true;
       // The operation may consume a real observation, but failure must not discard its timer.
-      pending ||= debounceTimer !== null;
+      pending ||= reloadJob !== null;
       clearReloadTimer();
       let candidate = pendingInProcessConfig ?? retryWriteCandidate;
       let committed = false;
@@ -1505,7 +1507,7 @@ export function startGatewayConfigReloader(opts: {
       clearReloadTimer();
       await source.stop();
       await ready.catch(() => {});
-      // Timer callbacks detach runReload; shutdown owns their full transaction unwind.
+      // Initial reads and explicit plugin operations share the same transaction unwind.
       await Promise.all(activeReloads);
     },
     hotReloadStatus: () => (initialized ? source.status() : undefined),

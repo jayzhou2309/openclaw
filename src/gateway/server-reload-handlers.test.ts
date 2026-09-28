@@ -199,7 +199,7 @@ function createGatewayReloadHandlers(
   const { requestRecoveryRestart, ...handlerParams } = params;
   let state = createDefaultGatewayReloadState();
   return createGatewayReloadHandlersImpl({
-    scheduler: createTestGatewayScheduler(vi.isFakeTimers() ? "fake-timers" : undefined),
+    scheduler: createTestGatewayScheduler("fake-timers"),
     getPluginRegistry: requireActivePluginChannelRegistry,
     deps: {} as never,
     broadcast: vi.fn(),
@@ -234,7 +234,7 @@ function createGatewayReloadHandlers(
 function startManagedGatewayConfigReloader(params: ManagedReloaderTestParams) {
   let state = createDefaultGatewayReloadState();
   return startManagedGatewayConfigReloaderImpl({
-    scheduler: createTestGatewayScheduler(vi.isFakeTimers() ? "fake-timers" : undefined),
+    scheduler: createTestGatewayScheduler("fake-timers"),
     getPluginRegistry: requireActivePluginChannelRegistry,
     minimalTestGateway: false,
     initialPluginInstallRecords: {},
@@ -3491,6 +3491,60 @@ describe("gateway hot reload commit policy", () => {
 });
 
 describe("gateway restart deferral preflight", () => {
+  it("catches up one restart retry and permits its emitter to stop the owner", async () => {
+    vi.useFakeTimers();
+    const clock = createGatewaySchedulerClock(Date.now());
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    const requestRecoveryRestart = vi
+      .fn<NonNullable<ReloadHandlerParams["requestRecoveryRestart"]>>()
+      .mockReturnValueOnce({ status: "failed" })
+      .mockImplementationOnce(() => {
+        handlers.stopRestartRetries();
+        return { status: "failed" };
+      });
+    const handlers = createGatewayReloadHandlers({ scheduler, requestRecoveryRestart });
+    try {
+      handlers.requestGatewayRestart(createGatewayRestartPlan(), {});
+      await clock.advanceBy(60_000);
+      expect(requestRecoveryRestart).toHaveBeenCalledTimes(2);
+      await clock.advanceBy(60_000);
+      expect(requestRecoveryRestart).toHaveBeenCalledTimes(2);
+    } finally {
+      handlers.stopRestartRetries();
+      await scheduler.stop();
+    }
+  });
+
+  it.each(["owner", "scheduler"] as const)(
+    "settles a retry parked by suspension when its %s stops",
+    async (boundary) => {
+      vi.useFakeTimers();
+      const clock = createGatewaySchedulerClock(Date.now());
+      const scheduler = createTestGatewayScheduler(clock.clock);
+      const requestRecoveryRestart = vi
+        .fn<NonNullable<ReloadHandlerParams["requestRecoveryRestart"]>>()
+        .mockReturnValue({ status: "failed" });
+      const handlers = createGatewayReloadHandlers({ scheduler, requestRecoveryRestart });
+      handlers.requestGatewayRestart(createGatewayRestartPlan(), {});
+      const suspension = tryBeginGatewaySuspendAdmission(() => {});
+      expect(suspension?.commit()).toBe(true);
+      const waking = clock.advanceBy(1_000);
+      try {
+        if (boundary === "owner") {
+          handlers.stopRestartRetries();
+        }
+        await scheduler.stop();
+        await waking;
+        expect(requestRecoveryRestart).toHaveBeenCalledTimes(1);
+      } finally {
+        suspension?.release();
+        handlers.stopRestartRetries();
+        await scheduler.stop();
+        await waking;
+      }
+    },
+  );
+
   it("retries an immediate restart when signal admission fails", async () => {
     restartTesting.resetRestartSignalState();
     resetGatewayWorkAdmission();
