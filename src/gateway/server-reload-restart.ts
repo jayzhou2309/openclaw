@@ -332,7 +332,7 @@ class GatewayRestartTransaction {
       run: () => {
         this.retryJob = null;
         if (!this.isCurrentRequest(retry.requestGeneration)) {
-          return;
+          return undefined;
         }
         // Timer callbacks outlive the config transaction root. Re-enter process
         // admission so prepared host suspension cannot race signal delivery.
