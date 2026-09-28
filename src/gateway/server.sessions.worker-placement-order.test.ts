@@ -99,6 +99,7 @@ test.each(["delete", "archive", "recover"] as const)(
       {
         dispatch: unexpectedPlacementOperation,
         forceDestroyEnvironment: unexpectedPlacementOperation,
+        readEnvironmentSessionIds: unexpectedPlacementOperation,
         reconcile: unexpectedPlacementOperation,
         reconcileActive: unexpectedPlacementOperation,
         resumeProvisioning: unexpectedPlacementOperation,
