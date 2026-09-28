@@ -1086,7 +1086,6 @@ export function startGatewayConfigReloader(opts: {
         await appliedRevision.flush(currentConfig);
         return;
       }
-      const nextRawHash = observedRawHash;
       const externalChangedPaths = diffConfigPaths(currentSourceConfig, snapshot.sourceConfig);
       const fingerprintedAuthoredChangedPaths = diffConfigPaths(
         currentFingerprintedAuthoredConfig,
@@ -1104,14 +1103,14 @@ export function startGatewayConfigReloader(opts: {
         : null;
       if (
         newObservedRawHash &&
-        (nextRawHash === currentRawHash || matchingWriterSlot?.rawHash !== nextRawHash)
+        (observedRawHash === currentRawHash || matchingWriterSlot?.rawHash !== observedRawHash)
       ) {
         // Returning to accepted bytes after a rejected edit is still an observed transition.
         // A slot upsert can race awaitWriteFinish; the rare duplicate still carries exact hashes.
         await appendExternalAudit({
           detectedBy: "watch",
           previousHash: previousObservedRawHash,
-          nextHash: nextRawHash,
+          nextHash: observedRawHash,
           valid: true,
           ...(journalChangedPaths.length > 0
             ? { changedPaths: capConfigAuditPaths(journalChangedPaths) }
@@ -1204,9 +1203,8 @@ export function startGatewayConfigReloader(opts: {
   }
 
   const applyPluginLifecycleChange: PluginLifecycleRuntimeApply = (params) => {
-    const previousOperation = pluginOperationTail;
     const operationId = randomUUID();
-    const operation: Promise<PluginRuntimeApplication> = previousOperation.then(async () => {
+    const operation: Promise<PluginRuntimeApplication> = pluginOperationTail.then(async () => {
       params.assertInvokerOwned?.();
       await ready;
       params.assertInvokerOwned?.();
