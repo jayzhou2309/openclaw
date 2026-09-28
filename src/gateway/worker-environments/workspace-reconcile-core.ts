@@ -9,7 +9,7 @@ import {
   type WorkspaceNode,
 } from "./workspace-manifest-comparison.js";
 import {
-  captureWorkspaceManifest,
+  readActualWorkspaceManifest,
   preflightWorkspaceApply,
   readWorkspaceNodes,
 } from "./workspace-manifest-worker.js";
@@ -19,7 +19,10 @@ import type {
 } from "./workspace-manifest.js";
 import { reconciliationDirectories } from "./workspace-reconcile-derived-paths.js";
 import { removeEmptyWorkspaceDirectory } from "./workspace-reconcile-fs.js";
-export { preflightWorkspaceApply } from "./workspace-manifest-worker.js";
+export {
+  preflightWorkspaceApply,
+  readActualWorkspaceManifest,
+} from "./workspace-manifest-worker.js";
 export { changedPaths, manifestNodes } from "./workspace-manifest-comparison.js";
 export { localWorkspaceNode } from "./workspace-reconcile-fs.js";
 export {
@@ -62,16 +65,6 @@ export async function assertWorkspaceMatchesManifest(params: {
       );
     }
   }
-}
-
-export async function readActualWorkspaceManifest(params: {
-  root: string;
-  baseCommit: string | null;
-  preserveDirectories?: ReadonlySet<string>;
-  includePaths?: ReadonlySet<string>;
-  signal?: AbortSignal;
-}): Promise<{ manifest: WorkerWorkspaceManifest; manifestRef: string }> {
-  return await captureWorkspaceManifest(params);
 }
 
 export async function inspectAcceptedWorkerWorkspace(params: {

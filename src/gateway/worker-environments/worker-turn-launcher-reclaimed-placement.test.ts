@@ -171,6 +171,8 @@ describe("worker turn launcher reclaimed placement", () => {
             changed: false,
             verifyStable: async () => {},
             verifyLocalStable: async () => {},
+            publishStagedResult: async () => {},
+            discardPreparedStagedResult: async () => {},
           };
         }),
         stop: vi.fn(async () => {}),

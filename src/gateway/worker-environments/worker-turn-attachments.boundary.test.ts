@@ -271,6 +271,8 @@ describe("current attachments in an active remote placement", () => {
             ...result,
             changed: true,
             verifyStable: async () => {},
+            publishStagedResult: async () => {},
+            discardPreparedStagedResult: async () => {},
           };
         }),
         syncWorkspace: vi.fn(),

@@ -285,6 +285,8 @@ describe("worker turn launcher terminal results", () => {
             changed: false,
             verifyStable: async () => {},
             verifyLocalStable: async () => {},
+            publishStagedResult: async () => {},
+            discardPreparedStagedResult: async () => {},
           };
         }),
         stop: vi.fn(async () => {}),
@@ -711,6 +713,8 @@ describe("worker turn launcher terminal results", () => {
               changed: false,
               verifyStable: async () => {},
               verifyLocalStable: async () => {},
+              publishStagedResult: async () => {},
+              discardPreparedStagedResult: async () => {},
             };
           }),
           stop: vi.fn(async () => {}),
