@@ -124,7 +124,7 @@ export function resolveServiceEntrypointIndex(
   programArguments: readonly string[],
 ): number | undefined {
   const args = [...programArguments];
-  const script = resolveRuntimeScriptPosition(args);
+  const { position: script } = resolveRuntimeScriptPosition(args);
   if (typeof script !== "number" && script.kind === "other") {
     return undefined;
   }

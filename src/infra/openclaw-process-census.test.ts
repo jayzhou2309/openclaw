@@ -136,12 +136,16 @@ it.each([
 });
 
 it.each([
+  ["bun", "run", "start"],
+  ["bun", "start"],
+  ["bun", "--loader", ".js:ts", "service.js"],
   ["bun", "run", "--silent", "start"],
   ["bun", "--silent", "run", "start"],
   ["bun", "--foreign-runtime-option", "run", "start"],
   ["bun", "--silent", "--title", "worker", "run", "start"],
   ["tsx", "--foreign-runtime-option", "watch", "service.js"],
   ["node", "--foreign-runtime-option", "service.js"],
+  ["node", "--max-semi-space-size=16", "service.js"],
 ])("ignores unfamiliar readable foreign argv %j", (...argv) => {
   rows.set(peer, { ppid: 1, argv, cwd: "/unrelated-app" });
   realpath.mockImplementation((file: string) => {
@@ -150,6 +154,12 @@ it.each([
     }
     return file;
   });
+  expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [] });
+});
+
+it("uses a declared Bun task before a same-named OpenClaw file", () => {
+  rows.set(peer, { ppid: 1, argv: ["bun", "run", "start"], cwd: "/unrelated-app" });
+  realpath.mockReturnValue("/app/openclaw.mjs");
   expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [] });
 });
 
@@ -254,6 +264,38 @@ it.each([
   expect(inspectOtherOpenClawProcesses()).toEqual({
     error: expect.stringContaining("runtime module package identity is unavailable"),
   });
+});
+
+it.each([
+  ["--test-reporter", "/app/reporter.js", "holder"],
+  ["--test-reporter", "file:///app/reporter.js", "holder"],
+  ["--test-reporter", "reporter/register", "unresolved"],
+  ["--test-reporter", "reporter", "unresolved"],
+  ["--test-global-setup", "setup", "unresolved"],
+  ["--foreign-runtime-option", "reporter", "unresolved"],
+  ["--foreign-runtime-option", "/app/reporter.js", "holder"],
+])("inspects potential module option %s=%s", (option, value, custody) => {
+  rows.set(peer, {
+    ppid: 1,
+    argv: ["node", `${option}=${value}`, "--test", "/unrelated-app/service.js"],
+    cwd: "/unrelated-app",
+  });
+  expect(inspectOtherOpenClawProcesses()).toEqual(
+    custody === "unresolved"
+      ? { error: expect.stringContaining("package identity is unavailable") }
+      : { pids: [peer] },
+  );
+});
+
+it.each([
+  "/tmp/openclaw-plugin-build-abc123/package/worker.js",
+  "/tmp/openclaw-update-runtime-Ab1234/tree/plugin/worker.js",
+])("preserves an artifact reached through a script alias: %s", (target) => {
+  rows.set(peer, { ppid: 1, argv: ["node", "/unrelated-app/alias.js"], cwd: "/unrelated-app" });
+  realpath.mockImplementation((file: string) =>
+    file === "/unrelated-app/alias.js" ? target : file,
+  );
+  expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [peer] });
 });
 
 it.each([
@@ -386,16 +428,17 @@ it.each([false, true])(
 
 it("uses native Darwin arguments and explicit foreign system-service facts", () => {
   mockProcessPlatform("darwin");
+  const foreignUid = (process.getuid?.() ?? 501) + 1;
   rows.set(peer, { ppid: 1, argv: ["node", "/app with spaces/openclaw.mjs", "status"] });
   census.mockImplementation((command: string) => ({
     status: 0,
     stdout: command.endsWith("lsof")
-      ? [...rows].map(([pid]) => `p${pid}\0n/foreign\0\n`).join("")
+      ? [...rows].map(([pid, row]) => `p${pid}\0n${row.cwd ?? "/foreign"}\0\n`).join("")
       : [...rows].map(([pid, row]) => `${pid} ${self} S ${row.ppid} 501`).join("\n"),
   }));
   darwinCommand.mockImplementation((pid: number) =>
     pid === 1
-      ? { argvUnavailable: true, executable: "/sbin/launchd", uid: 0 }
+      ? { argvUnavailable: true, executable: "/sbin/launchd", uid: foreignUid }
       : { argv: rows.get(pid)!.argv },
   );
   expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [peer] });
@@ -405,6 +448,9 @@ it("uses native Darwin arguments and explicit foreign system-service facts", () 
   expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [peer] });
   rows.delete(peer);
   expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [] });
+  rows.get(1)!.cwd = "/tmp/openclaw-plugin-build-abc123/package";
+  expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [1] });
+  rows.get(1)!.cwd = undefined;
   darwinCommand.mockImplementation(() => {
     throw new Error("unreadable live process");
   });

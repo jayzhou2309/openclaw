@@ -141,7 +141,6 @@ describe("classifyOpenClawArgv", () => {
     });
     expect(classifyOpenClawArgv(["bun", "run", "run", owned.script], { cwd: other.root })).toEqual({
       kind: "other",
-      packageIdentity: expect.objectContaining({ kind: "foreign" }),
     });
   });
 
@@ -160,7 +159,6 @@ describe("classifyOpenClawArgv", () => {
     });
     expect(classifyOpenClawArgv(["node", entry], { cwd: other.root })).toEqual({
       kind: "other",
-      packageIdentity: expect.objectContaining({ kind: "foreign" }),
     });
     expect(
       classifyOpenClawArgv(["node", other.script, "gateway"], { command: "gateway" }).kind,
@@ -172,14 +170,12 @@ describe("classifyOpenClawArgv", () => {
     const other = scriptFixture("app.js", "unrelated-service");
     expect(
       classifyOpenClawArgv(["node", "--import", owned.script, other.script, owned.script]),
-    ).toEqual({ kind: "other", packageIdentity: expect.objectContaining({ kind: "foreign" }) });
+    ).toEqual({ kind: "other" });
     expect(classifyOpenClawArgv(["node", "--eval", "0", owned.script])).toEqual({
       kind: "other",
-      packageIdentity: { kind: "not-inspected" },
     });
     expect(classifyOpenClawArgv(["node", other.script, "/opt/openclaw/openclaw.mjs"])).toEqual({
       kind: "other",
-      packageIdentity: expect.objectContaining({ kind: "foreign" }),
     });
     expect(
       classifyOpenClawArgv(["node", "--import", "loader.js", "--no-warnings", owned.script]),
@@ -190,7 +186,6 @@ describe("classifyOpenClawArgv", () => {
     });
     expect(classifyOpenClawArgv(["node", "--cpu-prof-name", owned.script, other.script])).toEqual({
       kind: "other",
-      packageIdentity: expect.objectContaining({ kind: "foreign" }),
     });
   });
 
@@ -240,7 +235,6 @@ describe("classifyOpenClawArgv", () => {
     });
     expect(classifyOpenClawArgv(["node", other.script], { additionalEntrypoints })).toEqual({
       kind: "other",
-      packageIdentity: expect.objectContaining({ kind: "foreign" }),
     });
   });
 });

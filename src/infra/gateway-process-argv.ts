@@ -29,11 +29,15 @@ const ENTRY_CANDIDATES = [
   "src/index.ts",
 ] as const;
 
-type ProcessInspectionFailure = {
-  kind: "unclassified";
-  cause: "cwd" | "script" | "package-identity" | "service-marker";
-  reason: string;
-};
+export function referencesRetainedArtifact(value: string): boolean {
+  return value
+    .split(/[\\/=]/u)
+    .some(
+      (part) =>
+        isLegacyPluginSourceCaptureName(part) ||
+        /^openclaw-update-runtime-[A-Za-z0-9]{6}$/u.test(part),
+    );
+}
 
 export type OpenClawArgvClassification =
   | {
@@ -41,28 +45,16 @@ export type OpenClawArgvClassification =
       entryIndex?: number;
       packageIdentity?: { root: string; entrypoint: string };
     }
-  | { kind: "other"; packageIdentity: ProcessPackageIdentity | { kind: "not-inspected" } }
-  | ProcessInspectionFailure
+  | { kind: "other" }
   | {
       kind: "unclassified";
-      cause: "runtime-syntax";
-      syntaxIndex: number;
-      pendingSubcommand?: "run" | "watch";
+      cause: "cwd" | "script" | "package-identity" | "service-marker" | "runtime-syntax";
       reason: string;
     };
 
-type ProcessPackageIdentity =
-  | { kind: "openclaw" }
-  | { kind: "foreign"; scripts: ReadonlySet<string> }
-  | ProcessInspectionFailure;
-
-/** Missing nested manifests may lead to an ancestor; unreadable or invalid identities never do. */
-export function readProcessPackageIdentity(
-  directory: string,
-  searchParents = false,
-): ProcessPackageIdentity {
-  let current = directory;
-  for (;;) {
+/** Only absent nested manifests permit ancestor lookup; unreadable identities stay unresolved. */
+export function readProcessPackageIdentity(directory: string, searchParents = false) {
+  for (let current = directory; ;) {
     let manifest: unknown;
     try {
       manifest = JSON.parse(fs.readFileSync(path.join(current, "package.json"), "utf8"));
@@ -77,11 +69,7 @@ export function readProcessPackageIdentity(
         current = parent;
         continue;
       }
-      return {
-        kind: "unclassified",
-        cause: "package-identity",
-        reason: "could not read package identity",
-      };
+      throw new Error("could not read package identity", { cause: error });
     }
     if (
       !isRecord(manifest) ||
@@ -89,27 +77,11 @@ export function readProcessPackageIdentity(
       !manifest.name.trim() ||
       manifest.name !== manifest.name.trim()
     ) {
-      return {
-        kind: "unclassified",
-        cause: "package-identity",
-        reason: "package identity has no valid name",
-      };
+      throw new Error("package identity has no valid name");
     }
-    if (manifest.name === "openclaw") {
-      return { kind: "openclaw" };
-    }
-    const scripts = isRecord(manifest.scripts) ? manifest.scripts : {};
-    return {
-      kind: "foreign",
-      scripts: new Set(
-        Object.entries(scripts)
-          .filter(([, value]) => typeof value === "string" && value.trim())
-          .map(([name]) => name),
-      ),
-    };
+    return { name: manifest.name, scripts: isRecord(manifest.scripts) ? manifest.scripts : {} };
   }
 }
-
 
 type ClassificationOptions = {
   command?: string;
@@ -121,6 +93,8 @@ type ClassificationOptions = {
   additionalEntrypoints?: readonly string[];
   /** Mutation admission needs package evidence, rather than executable-name hints. */
   requirePackageIdentity?: boolean;
+  /** Cleanup also needs package evidence for generic scripts. */
+  inspectPackage?: boolean;
 };
 
 export function readProcessWorkingDirectories(pids: readonly number[]): Map<number, string> {
@@ -189,26 +163,45 @@ function classifyEntrypoint(
   if (!opts.requirePackageIdentity && (exe.endsWith("/openclaw") || exe === "openclaw")) {
     return { kind: "openclaw", entryIndex: 0 };
   }
-  const entryIndex = /(?:^|\/)openclaw\.mjs$/.test(exe) ? 0 : resolveRuntimeScriptPosition(args);
+  const entryIndex = /(?:^|\/)openclaw\.mjs$/.test(exe)
+    ? 0
+    : resolveRuntimeScriptPosition(args).position;
   if (typeof entryIndex !== "number") {
     return entryIndex.kind === "unclassified"
       ? {
           kind: "unclassified",
           cause: "runtime-syntax",
-          syntaxIndex: entryIndex.index,
-          pendingSubcommand: entryIndex.pendingSubcommand,
           reason: entryIndex.reason,
         }
-      : { kind: "other", packageIdentity: { kind: "not-inspected" } };
+      : { kind: "other" };
   }
-  const identity = classifyOpenClawEntrypointPath(args[entryIndex]!, opts);
+  const script = args[entryIndex]!;
+  if (
+    opts.inspectPackage &&
+    !opts.requirePackageIdentity &&
+    opts.cwd &&
+    path.isAbsolute(opts.cwd) &&
+    isBunRuntime(args[0] ?? "") &&
+    !/[\\/]/u.test(script) &&
+    !path.extname(script)
+  ) {
+    const pkg = readProcessPackageIdentity(opts.cwd, true);
+    const task = pkg.scripts[script];
+    if (typeof task === "string" && task.trim()) {
+      return pkg.name === "openclaw" ? { kind: "openclaw" } : { kind: "other" };
+    }
+  }
+  const identity = classifyOpenClawEntrypointPath(script, opts);
   return identity.kind === "openclaw" ? { ...identity, entryIndex } : identity;
 }
 
 /** Path evidence is shared with cleanup even when launcher syntax is unfamiliar. */
 export function classifyOpenClawEntrypointPath(
   script: string,
-  opts: Pick<ClassificationOptions, "cwd" | "pid" | "additionalEntrypoints" | "requirePackageIdentity"> = {},
+  opts: Pick<
+    ClassificationOptions,
+    "cwd" | "pid" | "additionalEntrypoints" | "requirePackageIdentity" | "inspectPackage"
+  > = {},
 ): OpenClawArgvClassification {
   const normalized = normalizeProcArg(script);
   if (!opts.requirePackageIdentity && /(?:^|\/)openclaw\.mjs$/.test(normalized)) {
@@ -231,11 +224,23 @@ export function classifyOpenClawEntrypointPath(
   let directory: boolean;
   try {
     resolved = fs.realpathSync(scriptPath);
-    const stat = fs.statSync(resolved);
-    if (opts.requirePackageIdentity && !stat.isFile()) {
-      return { kind: "unclassified", cause: "script", reason: `entrypoint is not a regular file: ${script}` };
+    if (
+      opts.inspectPackage &&
+      !opts.requirePackageIdentity &&
+      referencesRetainedArtifact(resolved)
+    ) {
+      return { kind: "openclaw" };
     }
-    directory = stat.isDirectory();
+    const stat =
+      opts.requirePackageIdentity || opts.inspectPackage ? fs.statSync(resolved) : undefined;
+    if (opts.requirePackageIdentity && !stat?.isFile()) {
+      return {
+        kind: "unclassified",
+        cause: "script",
+        reason: `entrypoint is not a regular file: ${script}`,
+      };
+    }
+    directory = stat?.isDirectory() ?? false;
   } catch {
     return { kind: "unclassified", cause: "script", reason: "could not resolve script" };
   }
@@ -243,23 +248,31 @@ export function classifyOpenClawEntrypointPath(
   const entry = directory
     ? undefined
     : entrypoints.find((candidate) => resolvedNormalized.endsWith(`/${candidate}`));
+  if (!entry && (!opts.inspectPackage || opts.requirePackageIdentity)) {
+    return { kind: "other" };
+  }
   const root = entry
     ? resolved.slice(0, -entry.length)
     : directory
       ? resolved
       : path.dirname(resolved);
-  const identity = readProcessPackageIdentity(root, !entry && !directory);
-  if (entry && identity.kind === "unclassified") {
-    return identity;
+  try {
+    const identity = readProcessPackageIdentity(root, !entry && !directory);
+    return identity.name === "openclaw"
+      ? {
+          kind: "openclaw",
+          ...(opts.requirePackageIdentity
+            ? { packageIdentity: { root: path.resolve(root), entrypoint: resolved } }
+            : {}),
+        }
+      : { kind: "other" };
+  } catch (error) {
+    return {
+      kind: "unclassified",
+      cause: "package-identity",
+      reason: error instanceof Error ? error.message : String(error),
+    };
   }
-  return entry && identity.kind === "openclaw"
-    ? {
-        kind: "openclaw",
-        ...(opts.requirePackageIdentity
-          ? { packageIdentity: { root: path.resolve(root), entrypoint: resolved } }
-          : {}),
-      }
-    : { kind: "other", packageIdentity: identity };
 }
 
 export function parseProcCmdline(raw: string): string[] {
@@ -289,7 +302,7 @@ export function classifyOpenClawArgv(
   if (!opts.requirePackageIdentity && /^openclaw-[a-z0-9-]+$/.test(executable)) {
     return !command || executable === `openclaw-${command}`
       ? { kind: "openclaw" }
-      : { kind: "other", packageIdentity: { kind: "not-inspected" } };
+      : { kind: "other" };
   }
   const identity = classifyEntrypoint(args, opts);
   if (command) {
@@ -297,7 +310,7 @@ export function classifyOpenClawArgv(
       normalizeProcArg(
         getRootOptionAwareCommandPath(["node", ...args.slice(identity.entryIndex)], 1)[0] ?? "",
       ) !== command
-      ? { kind: "other", packageIdentity: { kind: "not-inspected" } }
+      ? { kind: "other" }
       : identity;
   }
   if (
