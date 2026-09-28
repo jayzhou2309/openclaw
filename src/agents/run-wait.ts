@@ -198,7 +198,7 @@ export async function readLatestAssistantReply(params: {
     const full = await callGateway<{ ok?: boolean; message?: unknown }>({
       method: "chat.message.get",
       params: { sessionKey: params.sessionKey, ...agentParams, messageId: meta.id },
-    });
+    }).catch(() => undefined);
     return full?.ok === true && readOpenClawMessageMeta(full.message)?.truncated !== true
       ? extractStoredAssistantText(full.message)
       : undefined;

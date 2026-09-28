@@ -248,6 +248,26 @@ describe("readLatestAssistantReply", () => {
     );
   });
 
+  it("returns no reply when the full-message lookup is rejected", async () => {
+    callGatewayMock.mockImplementation(async (request) => {
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              ...textAssistant("Report head\n...(truncated)..."),
+              __openclaw: { id: "msg-1", truncated: true, reason: "display-cap" },
+            },
+          ],
+        };
+      }
+      throw new Error("session changed while reading history; reload the conversation");
+    });
+
+    await expect(readLatestAssistantReply({ sessionKey: "agent:main:child" })).resolves.toBe(
+      undefined,
+    );
+  });
+
   it("keeps a literal truncation marker the assistant wrote", async () => {
     callGatewayMock.mockResolvedValue({
       messages: [textAssistant("The log ends with ...(truncated)... as expected.")],
