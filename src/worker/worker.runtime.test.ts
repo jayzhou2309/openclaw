@@ -11,13 +11,8 @@ import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
-import {
-  validateWorkerComputerParams,
-  validateWorkerPortalParams,
-  validateWorkerPresenceParams,
-  validateWorkerSessionsSendParams,
-  validateWorkerSessionsSpawnParams,
-} from "../../packages/gateway-protocol/src/index.js";
+import { validateWorkerComputerParams } from "../../packages/gateway-protocol/src/index.js";
+import { PresenceQueryParamsSchema } from "../../packages/gateway-protocol/src/schema/presence.js";
 import {
   type WorkerConnectRequestFrame,
   WorkerConnectRequestFrameSchema,
@@ -28,16 +23,18 @@ import {
   WorkerLiveEventRequestFrameSchema,
   WORKER_PROTOCOL_FEATURES,
   WORKER_RPC_SET_VERSION,
-  type WorkerPortalParams,
-  type WorkerPresenceParams,
-  type WorkerSessionsSendParams,
-  type WorkerSessionsSpawnParams,
   type WorkerTranscriptCommitParams,
   type WorkerTranscriptCommitRequestFrame,
   WorkerTranscriptCommitRequestFrameSchema,
   type WorkerTranscriptMessage,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { WorkerComputerParams } from "../../packages/gateway-protocol/src/schema/worker-computer.js";
+import {
+  validateWorkerGatewayToolInvokeParams,
+  type WorkerGatewayToolInvokeParams,
+  type WorkerToolSurface,
+  WorkerToolSurfaceSchema,
+} from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import {
   type WorkerInferenceCancelRequestFrame,
   WorkerInferenceCancelRequestFrameSchema,
@@ -55,12 +52,29 @@ import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.
 import { listRunningSessions, waitForExecScope } from "../agents/bash-process-registry.js";
 import { runExecProcess } from "../agents/bash-tools.exec-runtime.js";
 import { hasModelFallbackStop } from "../agents/failover-error.js";
+import {
+  prepareCoreToolPolicy,
+  projectAgentToolDefinition,
+} from "../agents/prepared-tool-surface.js";
 import * as agentSessionSdk from "../agents/sessions/sdk.js";
+import {
+  SessionPortalToolSchema,
+  SESSION_PORTAL_TOOL_DESCRIPTION,
+} from "../agents/tools/portal-tool-contract.js";
+import { PRESENCE_TOOL_DESCRIPTION } from "../agents/tools/presence-tool-contract.js";
+import {
+  PlacedSessionsSendSchema,
+  PlacedSessionsSpawnSchema,
+  PLACED_SESSIONS_SEND_DESCRIPTION,
+  PLACED_SESSIONS_SPAWN_DESCRIPTION,
+} from "../agents/tools/sessions-placement-tool-contract.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as boundaryFileRead from "../infra/boundary-file-read.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { saveExecApprovals, type ExecApprovalsFile } from "../infra/exec-approvals.js";
 import { runExec } from "../process/exec.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
+import { createWorkerComputerTool } from "./computer-runtime.js";
 import {
   buildWorkerConnectParams,
   parseWorkerLaunchDescriptor,
@@ -72,7 +86,12 @@ import {
   WorkerAdmissionDeadlineExceededError,
   WorkerConnectionStoppedError,
 } from "./worker-connection-contract.js";
-import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
+import {
+  createWorkerConnection,
+  WorkerConnection,
+  type WorkerConnectionState,
+} from "./worker-connection.js";
+import { createWorkerPlacementTools } from "./worker-placement-tools.js";
 import { parseWorkerProcessResult, type WorkerProcessResult } from "./worker-process-protocol.js";
 import { WorkerInferenceProxyClient } from "./worker-rpc-inference-client.js";
 import { WorkerLiveEventClient } from "./worker-rpc-live-event-client.js";
@@ -204,6 +223,8 @@ function assistantMessage(
 }
 
 class FakeWorkerGateway {
+  config?: OpenClawConfig;
+  toolSurface!: () => WorkerToolSurface;
   private readonly httpServer: Server;
   private readonly webSocketServer: WebSocketServer;
   private readonly clients = new Set<WebSocket>();
@@ -224,10 +245,7 @@ class FakeWorkerGateway {
   readonly acceptedTranscriptRequests: WorkerTranscriptCommitParams[] = [];
   readonly liveEventRequests: WorkerLiveEventParams[] = [];
   readonly inferenceRequests: WorkerInferenceStartParams[] = [];
-  readonly sessionSpawnRequests: WorkerSessionsSpawnParams[] = [];
-  readonly sessionSendRequests: WorkerSessionsSendParams[] = [];
-  readonly portalRequests: WorkerPortalParams[] = [];
-  readonly presenceRequests: WorkerPresenceParams[] = [];
+  readonly gatewayToolRequests: WorkerGatewayToolInvokeParams[] = [];
   readonly computerRequests: WorkerComputerParams[] = [];
   readonly applicationOrder: string[] = [];
 
@@ -304,6 +322,11 @@ class FakeWorkerGateway {
       return;
     }
     if (isRecord(parsed) && parsed.type === "req" && typeof parsed.id === "string") {
+      if (parsed.method === "worker.gatewayTool.cancel") {
+        this.methods.push(parsed.method);
+        this.send(socket, { type: "res", id: parsed.id, ok: true, payload: { cancelled: false } });
+        return;
+      }
       if (parsed.method === "worker.computer" && validateWorkerComputerParams(parsed.params)) {
         this.computerRequests.push(parsed.params);
         const closing = parsed.params.command === "computer.act";
@@ -343,40 +366,11 @@ class FakeWorkerGateway {
         );
         return;
       }
-      if (parsed.method === "worker.presence" && validateWorkerPresenceParams(parsed.params)) {
-        this.presenceRequests.push(structuredClone(parsed.params));
-        this.send(socket, {
-          type: "res",
-          id: parsed.id,
-          ok: true,
-          payload: {
-            resultJson: JSON.stringify({
-              content: [{ type: "text", text: "Ada is online" }],
-              details: { status: "ok", people: [{ name: "Ada" }] },
-            }),
-          },
-        });
-        return;
-      }
-      const sessionToolMethod =
-        parsed.method === "worker.sessions.spawn" &&
-        validateWorkerSessionsSpawnParams(parsed.params)
-          ? parsed.method
-          : parsed.method === "worker.sessions.send" &&
-              validateWorkerSessionsSendParams(parsed.params)
-            ? parsed.method
-            : parsed.method === "worker.portal" && validateWorkerPortalParams(parsed.params)
-              ? parsed.method
-              : undefined;
-      if (sessionToolMethod) {
-        this.handleSessionTool(socket, {
-          id: parsed.id,
-          method: sessionToolMethod,
-          params: parsed.params as
-            | WorkerSessionsSpawnParams
-            | WorkerSessionsSendParams
-            | WorkerPortalParams,
-        });
+      if (
+        parsed.method === "worker.gatewayTool.invoke" &&
+        validateWorkerGatewayToolInvokeParams(parsed.params)
+      ) {
+        this.handleGatewayTool(socket, parsed.id, parsed.params);
         return;
       }
     }
@@ -417,6 +411,7 @@ class FakeWorkerGateway {
       ok: true,
       payload: {
         type: "worker-hello-ok",
+        toolSurface: this.toolSurface(),
         environmentId: frame.params.admission.environmentId,
         sessionId: frame.params.admission.sessionId,
         ownerEpoch: frame.params.admission.ownerEpoch,
@@ -472,41 +467,32 @@ class FakeWorkerGateway {
     });
   }
 
-  private handleSessionTool(
+  private handleGatewayTool(
     socket: WebSocket,
-    frame: {
-      id: string;
-      method: "worker.sessions.spawn" | "worker.sessions.send" | "worker.portal";
-      params: WorkerSessionsSpawnParams | WorkerSessionsSendParams | WorkerPortalParams;
-    },
+    id: string,
+    request: WorkerGatewayToolInvokeParams,
   ): void {
-    this.methods.push(frame.method);
-    if (frame.method === "worker.sessions.spawn") {
-      this.sessionSpawnRequests.push(structuredClone(frame.params as WorkerSessionsSpawnParams));
-    } else if (frame.method === "worker.sessions.send") {
-      this.sessionSendRequests.push(structuredClone(frame.params as WorkerSessionsSendParams));
-    } else {
-      this.portalRequests.push(structuredClone(frame.params as WorkerPortalParams));
-    }
-    const requestCount =
-      this.sessionSpawnRequests.length +
-      this.sessionSendRequests.length +
-      this.portalRequests.length;
-    if (requestCount <= (this.options.dropSessionToolResponses ?? 0)) {
+    this.methods.push("worker.gatewayTool.invoke");
+    this.gatewayToolRequests.push(structuredClone(request));
+    if (this.gatewayToolRequests.length <= (this.options.dropSessionToolResponses ?? 0)) {
       // Lose the response after recording its request, without a heartbeat race.
       socket.terminate();
       return;
     }
     this.send(socket, {
       type: "res",
-      id: frame.id,
+      id,
       ok: true,
-      payload: {
-        resultJson: JSON.stringify({
-          content: [{ type: "text", text: "child accepted" }],
-          details: { status: "accepted", childSessionKey: "agent:main:cloud-child" },
-        }),
-      },
+      payload:
+        request.toolId === "presence"
+          ? {
+              content: [{ type: "text", text: "Ada is online" }],
+              details: { status: "ok", people: [{ name: "Ada" }] },
+            }
+          : {
+              content: [{ type: "text", text: "child accepted" }],
+              details: { status: "accepted", childSessionKey: "agent:main:cloud-child" },
+            },
     });
   }
 
@@ -952,7 +938,101 @@ async function setup(options?: FakeGatewayOptions): Promise<{
   await gateway.start();
   const workspaceDir = await mkdtemp(path.join(tmpdir(), "openclaw-worker-workspace-"));
   tempDirs.push(workspaceDir);
-  return { gateway, workspaceDir, launch: descriptor(gateway.socketPath, workspaceDir) };
+  const launch = descriptor(gateway.socketPath, workspaceDir);
+  gateway.toolSurface = () => {
+    const assignment = launch.assignment;
+    const policy = prepareCoreToolPolicy({
+      config: gateway.config,
+      agentId: assignment.agentId,
+      modelProvider: assignment.modelRef.provider,
+      modelId: assignment.modelRef.model,
+      ...(assignment.permissionMode
+        ? {
+            sessionPermissionPolicy: {
+              mode: assignment.permissionMode,
+              root: assignment.workspaceDir,
+            },
+          }
+        : {}),
+    });
+    const definitions = new Map(
+      createWorkerPlacementTools({
+        policy,
+        cwd: assignment.workspaceDir,
+        containmentRoot: assignment.workerContainmentRoot ?? assignment.workspaceDir,
+        execAuthority: assignment.toolAuthority.exec,
+        permissionMode: assignment.permissionMode,
+        agentId: assignment.agentId,
+        sessionKey: `worker:${SESSION_ID}`,
+        sessionId: SESSION_ID,
+        runId: assignment.runId,
+      }).map((tool) => [tool.name, projectAgentToolDefinition(tool)]),
+    );
+    if (assignment.browser) {
+      definitions.set("browser", {
+        name: "browser",
+        label: "Browser",
+        description: "Control the attached worker browser.",
+        parameters: Type.Object({}),
+        executionMode: undefined,
+      });
+    }
+    if (assignment.computer) {
+      definitions.set(
+        "computer",
+        projectAgentToolDefinition(
+          createWorkerComputerTool({
+            descriptor: assignment.computer,
+            runId: assignment.runId,
+            requestComputer: async () => {
+              throw new Error("Definition preparation cannot invoke the desktop");
+            },
+            registerRunCleanup: () => {},
+          }),
+        ),
+      );
+    }
+    const gatewayDefinitions = [
+      ["sessions_spawn", PlacedSessionsSpawnSchema, PLACED_SESSIONS_SPAWN_DESCRIPTION],
+      ["sessions_send", PlacedSessionsSendSchema, PLACED_SESSIONS_SEND_DESCRIPTION],
+      ["portal", SessionPortalToolSchema, SESSION_PORTAL_TOOL_DESCRIPTION],
+      ["presence", PresenceQueryParamsSchema, PRESENCE_TOOL_DESCRIPTION],
+    ] as const;
+    for (const [name, parameters, description] of gatewayDefinitions) {
+      definitions.set(name, {
+        name,
+        label: name,
+        description,
+        parameters,
+        executionMode: undefined,
+      });
+    }
+    const surface = {
+      generation: "runtime-surface",
+      policy,
+      tools: assignment.toolAuthority.allowedToolNames.flatMap((name) => {
+        const definition = definitions.get(name);
+        if (!definition) {
+          return [];
+        }
+        const gatewayTool = gatewayDefinitions.some(([toolName]) => toolName === name);
+        return [
+          {
+            id: name,
+            definition,
+            execution: gatewayTool ? "gateway" : "placement",
+            ...(name === "sessions_spawn" || name === "sessions_send"
+              ? { replay: true as const }
+              : {}),
+          },
+        ];
+      }),
+    };
+    if (!Value.Check(WorkerToolSurfaceSchema, surface))
+      throw new Error("Invalid test tool surface");
+    return surface;
+  };
+  return { gateway, workspaceDir, launch };
 }
 
 afterEach(async () => {
@@ -1049,7 +1129,6 @@ describe("worker runtime", () => {
   it("runs a full embedded turn through remote inference, live events, and transcript commits", async () => {
     const { gateway, workspaceDir, launch } = await setup();
     await writeFile(path.join(workspaceDir, "AGENTS.md"), "worker-bootstrap-marker", "utf8");
-
     const result = await runWorkerDescriptor(launch);
 
     expect(result.status).toBe("completed");
@@ -1338,30 +1417,11 @@ describe("worker runtime", () => {
   registerWorkerGatewayToolRpcTests({ setup });
 
   it.each([
-    {
-      name: "spawn",
-      invoke: (connection: ReturnType<typeof createWorkerConnection>) =>
-        connection.requestSessionsSpawn({
-          toolCallId: "call-durable-spawn",
-          task: "start a nested cloud child",
-        }),
-      requests: (gateway: FakeWorkerGateway) => gateway.sessionSpawnRequests,
-      request: { toolCallId: "call-durable-spawn", task: "start a nested cloud child" },
-    },
+    { name: "spawn", toolId: "sessions_spawn", arguments: { task: "start a nested cloud child" } },
     {
       name: "send",
-      invoke: (connection: ReturnType<typeof createWorkerConnection>) =>
-        connection.requestSessionsSend({
-          toolCallId: "call-durable-send",
-          sessionKey: "agent:main:cloud-child",
-          message: "status",
-        }),
-      requests: (gateway: FakeWorkerGateway) => gateway.sessionSendRequests,
-      request: {
-        toolCallId: "call-durable-send",
-        sessionKey: "agent:main:cloud-child",
-        message: "status",
-      },
+      toolId: "sessions_send",
+      arguments: { sessionKey: "agent:main:cloud-child", message: "status" },
     },
   ])("replays the same durable $name operation across response loss", async (testCase) => {
     const { gateway, launch } = await setup({ dropSessionToolResponses: 2 });
@@ -1374,20 +1434,21 @@ describe("worker runtime", () => {
     connection.onStateChange((state) => states.push(state.kind));
     try {
       await connection.start();
-
-      const response = await testCase.invoke(connection);
+      const request = {
+        generation: "runtime-surface",
+        toolCallId: `call-durable-${testCase.name}`,
+        toolId: testCase.toolId,
+        arguments: testCase.arguments,
+      };
+      const response = await connection.invokeGatewayTool(request, { replay: true });
 
       expect(response).toMatchObject({
         ok: true,
-        payload: { resultJson: expect.stringContaining("child accepted") },
+        payload: { content: [{ type: "text", text: "child accepted" }] },
       });
       expect(gateway.connectionCount).toBe(3);
       expect(states.filter((state) => state === "ready")).toHaveLength(3);
-      expect(testCase.requests(gateway)).toEqual([
-        testCase.request,
-        testCase.request,
-        testCase.request,
-      ]);
+      expect(gateway.gatewayToolRequests).toEqual([request, request, request]);
     } finally {
       await connection.stop();
     }
@@ -1402,12 +1463,17 @@ describe("worker runtime", () => {
     });
     try {
       await connection.start();
-      const request = { toolCallId: "call-portal-once", action: "open" as const, port: 3000 };
+      const request = {
+        generation: "runtime-surface",
+        toolId: "portal",
+        toolCallId: "call-portal-once",
+        arguments: { action: "open", port: 3000 },
+      };
 
-      await expect(connection.requestPortal(request)).rejects.toMatchObject({
+      await expect(connection.invokeGatewayTool(request)).rejects.toMatchObject({
         name: "WorkerConnectionInterruptedError",
       });
-      expect(gateway.portalRequests).toEqual([request]);
+      expect(gateway.gatewayToolRequests).toEqual([request]);
     } finally {
       await connection.stop();
     }
@@ -1520,6 +1586,7 @@ describe("worker runtime", () => {
       } else {
         start.mockResolvedValue({
           type: "worker-hello-ok",
+          toolSurface: { generation: "surface", tools: [], policy: prepareCoreToolPolicy({}) },
           environmentId: launch.admission.environmentId,
           sessionId: SESSION_ID,
           ownerEpoch: OWNER_EPOCH,
@@ -1870,13 +1937,11 @@ describe("worker runtime", () => {
 
   it("revokes local tool handles when their worker turn closes", async () => {
     const { launch } = await setup();
-    const toolFactory = await import("../agents/agent-tools.finalize.js");
-    const finalize = vi.spyOn(toolFactory, "finalizeAgentTools");
+    const adapter = await import("../agents/agent-tool-definition-adapter.js");
+    const finalize = vi.spyOn(adapter, "toToolDefinitions");
     try {
       await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
-      const tools = finalize.mock.results[0]?.value as ReturnType<
-        typeof toolFactory.finalizeAgentTools
-      >;
+      const tools = finalize.mock.calls.at(-1)![0];
       const processTool = tools.find((tool) => tool.name === "process")!;
       await expect(
         processTool.execute("retained-process", { action: "list" }),

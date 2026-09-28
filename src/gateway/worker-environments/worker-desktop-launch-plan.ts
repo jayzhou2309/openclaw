@@ -6,10 +6,7 @@ import type {
   WorkerBrowserLaunchDescriptor,
   WorkerComputerLaunchDescriptor,
 } from "../../worker/launch-descriptor.js";
-import type {
-  WorkerToolAuthority,
-  WorkerOptionalLocalToolName,
-} from "../../worker/tool-authority.js";
+import type { WorkerOptionalLocalToolName } from "../../worker/tool-authority.js";
 import type { PreparedWorkerComputer } from "./computer-transport.js";
 import { resolveWorkerToolAuthority } from "./worker-tool-authority.js";
 
@@ -24,7 +21,9 @@ export async function prepareWorkerDesktopLaunchPlan(params: {
 }): Promise<{
   browser?: WorkerBrowserLaunchDescriptor;
   computer?: WorkerComputerLaunchDescriptor;
-  toolAuthority: WorkerToolAuthority;
+  toolAuthority: ReturnType<typeof resolveWorkerToolAuthority>["toolAuthority"];
+  capabilityProfile: ReturnType<typeof resolveWorkerToolAuthority>["capabilityProfile"];
+  policy: ReturnType<typeof resolveWorkerToolAuthority>["policy"];
   preparedComputer?: PreparedWorkerComputer;
 }> {
   const computerSupported =
@@ -48,7 +47,7 @@ export async function prepareWorkerDesktopLaunchPlan(params: {
   if (computer) {
     availableOptionalToolNames.push("computer");
   }
-  const toolAuthority = resolveWorkerToolAuthority({
+  const { toolAuthority, capabilityProfile, policy } = resolveWorkerToolAuthority({
     modelRef: params.modelRef,
     turn: params.turn,
     portalAvailable: params.portalAvailable,
@@ -56,6 +55,8 @@ export async function prepareWorkerDesktopLaunchPlan(params: {
   });
   return {
     toolAuthority,
+    capabilityProfile,
+    policy,
     ...(computer && toolAuthority.allowedToolNames.includes("computer")
       ? { computer, preparedComputer }
       : {}),

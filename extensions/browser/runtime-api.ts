@@ -1,4 +1,5 @@
 export { createBrowserTool } from "./src/browser-tool.js";
+export { createBrowserToolDefinition } from "./src/browser-tool-description.js";
 export {
   createAttachedBrowserToolRuntime,
   type AttachedBrowserToolRuntime,

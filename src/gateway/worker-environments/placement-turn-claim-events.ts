@@ -25,6 +25,7 @@ import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { PlacementTurnClaimAuthority } from "./placement-turn-authority.js";
+import type { WorkerGatewayToolRuntime } from "./worker-gateway-tool-runtime.js";
 
 type TurnClaimReleaseWaiter = (error?: Error) => void;
 
@@ -82,6 +83,7 @@ type BoundWorkerTurnOwner = {
   claimKey: string;
   runtime: {
     assertActive: () => void;
+    toolSurface?: WorkerGatewayToolRuntime;
     delegatedAuthority: AgentRunDelegatedAuthority;
     approvalLifetime: AbortController;
     finishing?: {
@@ -317,7 +319,10 @@ export function captureWorkerTurnClaimCurrentness(
 }
 
 function resolveWorkerTurnRuntime(
-  identity: WorkerConnectionIdentity,
+  identity: Pick<
+    WorkerConnectionIdentity,
+    "turnClaim" | "sessionId" | "runId" | "environmentId" | "ownerEpoch"
+  >,
 ): BoundWorkerTurnOwner["runtime"] | undefined {
   const claim = identity.turnClaim;
   if (
@@ -352,6 +357,29 @@ function resolveWorkerTurnRuntime(
     return undefined;
   }
   return runtime;
+}
+
+export function bindWorkerTurnToolSurface(
+  store: WorkerTurnExecutionIdentityStore,
+  claim: WorkerSessionTurnClaim,
+  toolSurface: WorkerGatewayToolRuntime,
+): void {
+  const path = store[WORKER_TURN_EXECUTION_IDENTITY_PATH];
+  const owner = path ? workerTurnOwners.get(path)?.get(claim.sessionId) : undefined;
+  if (
+    !owner ||
+    owner.claimKey !== claimKey(claim) ||
+    !owner.runtime.claimAuthority.isCurrent() ||
+    !validateAgentRunDelegatedAuthority(owner.runtime.delegatedAuthority)
+  ) {
+    throw new Error("Worker turn has no admitted tool surface owner");
+  }
+  owner.runtime.toolSurface?.abort();
+  owner.runtime.toolSurface = toolSurface;
+}
+
+export function getWorkerTurnToolSurface(identity: Parameters<typeof resolveWorkerTurnRuntime>[0]) {
+  return resolveWorkerTurnRuntime(identity)?.toolSurface;
 }
 
 /** Capture before buffering; delayed events must never bind to a replacement owner. */
@@ -505,6 +533,7 @@ export function registerWorkerTurnClaimClosedHandler(
 }
 
 function closeBoundOwner(owner: BoundWorkerTurnOwner): void {
+  owner.runtime.toolSurface?.abort();
   owner.runtime.approvalLifetime.abort();
   owner.runtime.finishing = undefined;
   owner.runtime.stopWatchingAuthority?.();

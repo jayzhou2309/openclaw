@@ -1,11 +1,9 @@
 import { expect, it } from "vitest";
+import type { WorkerTranscriptCommitParams } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
-  WORKER_PORTAL_PROTOCOL_FEATURE,
-  WORKER_PRESENCE_PROTOCOL_FEATURE,
-  type WorkerPresenceParams,
-  type WorkerSessionsSpawnParams,
-  type WorkerTranscriptCommitParams,
-} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+  WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
+  type WorkerGatewayToolInvokeParams,
+} from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import type { WorkerInferenceStartParams } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import type { WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import { runWorkerDescriptor } from "./worker.runtime.js";
@@ -20,8 +18,7 @@ type WorkerGatewayToolFixture = {
   }) => Promise<{
     gateway: {
       inferenceRequests: WorkerInferenceStartParams[];
-      presenceRequests: WorkerPresenceParams[];
-      sessionSpawnRequests: WorkerSessionsSpawnParams[];
+      gatewayToolRequests: WorkerGatewayToolInvokeParams[];
       transcriptRequests: WorkerTranscriptCommitParams[];
     };
     launch: WorkerLaunchDescriptor;
@@ -50,24 +47,18 @@ export function registerWorkerGatewayToolAvailabilityTests({ setup }: WorkerGate
     ]);
   });
 
-  it.each([
-    { name: "portal", feature: WORKER_PORTAL_PROTOCOL_FEATURE },
-    { name: "presence", feature: WORKER_PRESENCE_PROTOCOL_FEATURE },
-  ] as const)(
-    "hides $name when the admitted Gateway lacks its protocol support",
-    async ({ name, feature }) => {
-      const { gateway, launch } = await setup();
-      launch.assignment.toolAuthority.allowedToolNames = ["read", name];
-      launch.admission.handshake.protocolFeatures =
-        launch.admission.handshake.protocolFeatures.filter((candidate) => candidate !== feature);
+  it("rejects a Gateway without the admitted tool-surface capability before inference", async () => {
+    const { gateway, launch } = await setup();
+    launch.admission.handshake.protocolFeatures =
+      launch.admission.handshake.protocolFeatures.filter(
+        (feature) => feature !== WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
+      );
 
-      await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
-
-      expect(gateway.inferenceRequests[0]?.context.tools?.map((tool) => tool.name)).toEqual([
-        "read",
-      ]);
-    },
-  );
+    await expect(runWorkerDescriptor(launch)).rejects.toThrow(
+      "Gateway does not support the admitted worker tool surface.",
+    );
+    expect(gateway.inferenceRequests).toHaveLength(0);
+  });
 
   it("runs with no tools when the Gateway authority is empty", async () => {
     const { gateway, launch } = await setup();
@@ -80,16 +71,18 @@ export function registerWorkerGatewayToolAvailabilityTests({ setup }: WorkerGate
 }
 
 export function registerWorkerGatewayToolRpcTests({ setup }: WorkerGatewayToolFixture) {
-  it("runs an authorized nested-session tool through the closed worker RPC", async () => {
+  it("runs an authorized nested-session tool through the generic Gateway transport", async () => {
     const { gateway, launch } = await setup({ inferencePlans: ["session-tool", "text"] });
     launch.assignment.toolAuthority.allowedToolNames = ["sessions_spawn"];
 
     await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
 
-    expect(gateway.sessionSpawnRequests).toEqual([
+    expect(gateway.gatewayToolRequests).toEqual([
       {
+        generation: "runtime-surface",
+        toolId: "sessions_spawn",
         toolCallId: "nested-session-spawn-call",
-        task: "start a nested cloud child",
+        arguments: { task: "start a nested cloud child" },
       },
     ]);
     expect(gateway.inferenceRequests).toHaveLength(2);
@@ -102,7 +95,7 @@ export function registerWorkerGatewayToolRpcTests({ setup }: WorkerGatewayToolFi
     ).toContain("sessions_spawn");
   });
 
-  it("returns Gateway presence to an authorized worker model through the closed RPC", async () => {
+  it("returns Gateway presence to an authorized worker model through the generic Gateway transport", async () => {
     const args = { action: "person", person: "me", include: ["devices"] };
     const { gateway, launch } = await setup({
       inferencePlans: [{ toolName: "presence", toolCallId: "presence-read", args }, "text"],
@@ -110,7 +103,14 @@ export function registerWorkerGatewayToolRpcTests({ setup }: WorkerGatewayToolFi
     launch.assignment.toolAuthority.allowedToolNames = ["presence"];
 
     await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
-    expect(gateway.presenceRequests).toEqual([{ ...args, toolCallId: "presence-read" }]);
+    expect(gateway.gatewayToolRequests).toEqual([
+      {
+        generation: "runtime-surface",
+        toolId: "presence",
+        toolCallId: "presence-read",
+        arguments: args,
+      },
+    ]);
     const result = gateway.transcriptRequests
       .flatMap((request) => request.messages)
       .find((message) => message.role === "toolResult" && message.toolName === "presence");

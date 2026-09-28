@@ -1,14 +1,6 @@
-import { Type, type Static } from "typebox";
-import { lazyCompile } from "../protocol-validator.js";
+import { Type } from "typebox";
 import { SkillLibraryFileSchema } from "./skill-library.js";
-import { WorkerSessionToolResponseFrameSchema } from "./worker-admission.js";
 
-export const WORKER_SKILL_WORKSHOP_FEATURE = "worker-skill-workshop-v1";
-export const WorkerSkillWorkshopBindingSchema = Type.Object(
-  { multipleProfiles: Type.Boolean() },
-  { additionalProperties: false },
-);
-export type WorkerSkillWorkshopBinding = Static<typeof WorkerSkillWorkshopBindingSchema>;
 export const SkillLibraryWorkshopSchema = Type.Object(
   {
     action: Type.Enum(
@@ -67,16 +59,3 @@ export const SkillLibraryWorkshopSchema = Type.Object(
   },
   { additionalProperties: false },
 );
-export const WorkerSkillWorkshopParamsSchema = Type.Object(
-  {
-    toolCallId: Type.String({ minLength: 1, maxLength: 256 }),
-    arguments: SkillLibraryWorkshopSchema,
-  },
-  { additionalProperties: false },
-);
-export type WorkerSkillWorkshopParams = Static<typeof WorkerSkillWorkshopParamsSchema>;
-export const validateWorkerSkillWorkshopParams = lazyCompile(WorkerSkillWorkshopParamsSchema);
-export const WorkerSkillWorkshopResponseFrameSchema = WorkerSessionToolResponseFrameSchema;
-export type WorkerSkillWorkshopResponseFrame = Static<
-  typeof WorkerSkillWorkshopResponseFrameSchema
->;

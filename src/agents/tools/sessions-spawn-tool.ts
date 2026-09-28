@@ -60,6 +60,10 @@ import {
   resolveSandboxedSessionToolContext,
 } from "./sessions-helpers.js";
 import {
+  PlacedSessionsSpawnSchema,
+  PLACED_SESSIONS_SPAWN_DESCRIPTION,
+} from "./sessions-placement-tool-contract.js";
+import {
   maybeSpawnVisibleSession,
   type VisibleSessionsSpawnDeps,
   VISIBLE_SESSIONS_SPAWN_SCHEMA,
@@ -304,6 +308,7 @@ function resolveAcpUnavailableMessage(opts?: { sandboxed?: boolean; config?: Ope
 export function createSessionsSpawnTool(
   opts?: {
     agentSessionKey?: string;
+    workerPlacement?: boolean;
     requesterTurnRunId?: string;
     /** Separate key used only for completion routing (registerSubagentRun requesterSessionKey). */
     completionOwnerKey?: string;
@@ -362,15 +367,17 @@ export function createSessionsSpawnTool(
     displaySummary: acpAvailable
       ? SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY
       : SESSIONS_SPAWN_SUBAGENT_TOOL_DISPLAY_SUMMARY,
-    description: describeSessionsSpawnTool({
-      acpAvailable,
-      threadAvailable,
-      subagentThreadAvailable: threadAvailability.subagent,
-      swarmEnabled: swarmConfig.enabled,
-      sessionToolsVisibility,
-      spawnRestricted: restrictToSpawned,
-    }),
-    parameters,
+    description: opts?.workerPlacement
+      ? PLACED_SESSIONS_SPAWN_DESCRIPTION
+      : describeSessionsSpawnTool({
+          acpAvailable,
+          threadAvailable,
+          subagentThreadAvailable: threadAvailability.subagent,
+          swarmEnabled: swarmConfig.enabled,
+          sessionToolsVisibility,
+          spawnRestricted: restrictToSpawned,
+        }),
+    parameters: opts?.workerPlacement ? PlacedSessionsSpawnSchema : parameters,
     execute: async (_toolCallId, args, signal) =>
       withToolEffectBoundary(async (onSpawnEffectsStart) => {
         const executionSignal =

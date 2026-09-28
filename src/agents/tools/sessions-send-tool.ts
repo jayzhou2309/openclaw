@@ -73,6 +73,10 @@ import {
   resolveVisibleSessionReference,
 } from "./sessions-helpers.js";
 import {
+  PlacedSessionsSendSchema,
+  PLACED_SESSIONS_SEND_DESCRIPTION,
+} from "./sessions-placement-tool-contract.js";
+import {
   prepareSessionsSendFollowup,
   startSessionsSendFollowup,
 } from "./sessions-send-followup.js";
@@ -180,8 +184,10 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
     label: "Session Send",
     name: "sessions_send",
     displaySummary: SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
-    description: describeSessionsSendTool(),
-    parameters: SessionsSendToolSchema,
+    description: opts?.workerPlacement
+      ? PLACED_SESSIONS_SEND_DESCRIPTION
+      : describeSessionsSendTool(),
+    parameters: opts?.workerPlacement ? PlacedSessionsSendSchema : SessionsSendToolSchema,
     outputSchema: SessionsSendOutputSchema,
     prepareArguments: normalizeSessionsSendArguments,
     execute: async (_toolCallId, args) => {
@@ -656,6 +662,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
 
       return await runWithScopedSessionAccess({
         cfg,
+        storePath: opts?.expectedTargetStorePath,
         agentId: targetAgentId,
         expectedSessionId,
         ...(opts?.signal ? { signal: opts.signal } : {}),

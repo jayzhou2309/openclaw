@@ -1,5 +1,7 @@
+import type { AnyAgentTool } from "../../agents/tools/common.js";
 import type { GatewayScheduler } from "../../infra/gateway-scheduler.js";
 import type { WorkerExecutionMode, WorkerProfile } from "../../plugins/types.js";
+import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import type { WorkerEnvironmentNodeTunnel } from "./environment-access.js";
 import type { WorkerInferenceStore } from "./inference-store.js";
 import type { WorkerInferenceExecutor } from "./inference.js";
@@ -12,7 +14,6 @@ import type { WorkerProviderLifecycleInputOptions } from "./provider-lifecycle.t
 import type { WorkerEnvironmentSessionAttachmentOptions } from "./session-attachment-service.js";
 import type { WorkerTranscriptCommitApplication } from "./transcript-commit.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
-import type { createWorkerTurnRpc } from "./worker-turn-rpc.js";
 
 export type WorkerEnvironmentCreateRequest = {
   profileId: string;
@@ -72,7 +73,10 @@ export type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOption
     executeInference: WorkerInferenceExecutor;
     inferenceStore?: WorkerInferenceStore;
     placementStore?: WorkerSessionPlacementGate;
-    executeSessionTool?: Parameters<typeof createWorkerTurnRpc>[0]["executeSessionTool"];
+    createGatewayTools?: (params: {
+      identity: WorkerConnectionIdentity;
+      skillWorkshop?: AnyAgentTool;
+    }) => Promise<AnyAgentTool[]>;
   };
 
 export type WorkerEnvironmentReconcileCore = (

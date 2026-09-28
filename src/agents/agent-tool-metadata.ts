@@ -17,24 +17,43 @@ export type AgentToolActionDescriptor = Readonly<{
   operation: "filesystem" | "memory" | "openclaw" | "process";
 }>;
 
+export type AgentToolExecutionLocation =
+  | { kind: "placement" }
+  | {
+      kind: "gateway";
+      replay?: boolean;
+      connectionScoped?: true;
+      timeout?: {
+        minimumMs?: number;
+        argument?: string;
+        defaultSeconds?: number;
+        paddingMs?: number;
+      };
+    };
+
+type ToolActionState = {
+  descriptor?: AgentToolActionDescriptor;
+  executionLocation?: AgentToolExecutionLocation;
+};
+
 // Rebuilt tools retain prepared classification without adding weak-table edges.
 class ToolActionMetadata extends PluginHostObject {
-  #descriptor: AgentToolActionDescriptor;
+  #state: ToolActionState;
 
-  constructor(tool: AnyAgentTool, descriptor: AgentToolActionDescriptor) {
+  constructor(tool: AnyAgentTool, state: ToolActionState) {
     super(tool);
-    this.#descriptor = descriptor;
+    this.#state = { ...state };
   }
 
-  static get(tool: AnyAgentTool): AgentToolActionDescriptor | undefined {
-    return #descriptor in tool ? tool.#descriptor : undefined;
+  static get(tool: AnyAgentTool): ToolActionState | undefined {
+    return #state in tool ? tool.#state : undefined;
   }
 
-  static set(tool: AnyAgentTool, descriptor: AgentToolActionDescriptor): void {
-    if (#descriptor in tool) {
-      tool.#descriptor = descriptor;
+  static set(tool: AnyAgentTool, state: ToolActionState): void {
+    if (#state in tool) {
+      Object.assign(tool.#state, state);
     } else {
-      void new ToolActionMetadata(tool, descriptor);
+      void new ToolActionMetadata(tool, state);
     }
   }
 }
@@ -48,24 +67,28 @@ const openclawAction: AgentToolActionDescriptor = Object.freeze({
   operation: "openclaw",
 });
 
+export function bindAgentToolExecutionLocation(
+  tool: AnyAgentTool,
+  location: AgentToolExecutionLocation,
+): void {
+  ToolActionMetadata.set(tool, { executionLocation: location });
+}
+
+export function getAgentToolExecutionLocation(tool: AnyAgentTool) {
+  return ToolActionMetadata.get(tool)?.executionLocation;
+}
+
 export function bindAgentToolActionDescriptor(
   tool: AnyAgentTool,
   descriptor: AgentToolActionDescriptor,
 ): void {
-  ToolActionMetadata.set(tool, descriptor);
+  ToolActionMetadata.set(tool, { descriptor });
 }
 
 export function getAgentToolActionDescriptor(
   tool: AnyAgentTool,
 ): AgentToolActionDescriptor | undefined {
-  return ToolActionMetadata.get(tool);
-}
-
-function copyAgentToolActionDescriptor(source: AnyAgentTool, target: AnyAgentTool): void {
-  const descriptor = getAgentToolActionDescriptor(source);
-  if (descriptor) {
-    bindAgentToolActionDescriptor(target, descriptor);
-  }
+  return ToolActionMetadata.get(tool)?.descriptor;
 }
 
 /** Preserve only the metadata owned by a before-tool-call wrapper rebuild. */
@@ -77,7 +100,10 @@ export function copyBeforeToolCallWrapperMetadata(
   // SAFETY: both metadata owners attach to the same runtime tool object shape.
   copyChannelAgentToolMeta(source as never, target as never);
   copyToolTerminalPresentation(source, target);
-  copyAgentToolActionDescriptor(source, target);
+  const state = ToolActionMetadata.get(source);
+  if (state) {
+    ToolActionMetadata.set(target, state);
+  }
   copyAgentToolAvailability(source, target);
 }
 
@@ -103,14 +129,10 @@ export function copyAgentToolMetadata<T extends AnyAgentTool>(
   if (source === target) {
     return target;
   }
-  copyPluginToolMeta(source, target);
-  copyChannelAgentToolMeta(source as never, target as never);
+  copyBeforeToolCallWrapperMetadata(source, target);
   copyBeforeToolCallMetadata(source, target, wrapExecution);
-  copyToolTerminalPresentation(source, target);
   copyCodeModeControlToolIdentity(source, target);
   copyCronScheduledToolProjection(source, target);
   copyInternalToolExecutionPreparer(source, target);
-  copyAgentToolActionDescriptor(source, target);
-  copyAgentToolAvailability(source, target);
   return target;
 }

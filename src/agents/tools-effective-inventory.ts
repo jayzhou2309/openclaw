@@ -19,7 +19,6 @@ import { normalizeProviderTransportWithPlugin } from "../plugins/provider-runtim
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
 import { createOpenClawCodingToolsInternal } from "./agent-tools.js";
-import { resolveEffectiveToolPolicy } from "./agent-tools.policy.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import { resolveBundledStaticCatalogModel } from "./embedded-agent-runner/model.static-catalog.js";
@@ -60,7 +59,7 @@ function buildToolInventoryNotices(params: {
   cfg: OpenClawConfig;
   profile: string;
   entries: EffectiveToolInventoryEntry[];
-  effectivePolicy: ReturnType<typeof resolveEffectiveToolPolicy>;
+  effectivePolicy: ReturnType<typeof resolveConversationCapabilityProfile>["policy"];
 }): EffectiveToolInventoryNotice[] | undefined {
   const hasBrowserTool = params.entries.some(
     (entry) => normalizeToolPolicyName(entry.id) === "browser",
@@ -363,35 +362,23 @@ export function resolveEffectiveToolInventory(
   const diagnostics = createToolAccessDiagnostics({ profiles: capabilityProfile.policy.profiles });
   const effectiveTools = createOpenClawCodingToolsInternal(
     {
+      ...params,
       conversationCapabilityProfile: capabilityProfile,
       agentId,
-      sessionKey: params.sessionKey,
-      sessionId: params.sessionId,
       workspaceDir,
       agentDir,
       config: params.cfg,
-      modelProvider: params.modelProvider,
-      modelId: params.modelId,
       modelApi: runtimeModelContext.modelApi,
       modelBaseUrl: runtimeModelContext.runtimeModel?.baseUrl,
       modelCompat,
-      messageProvider: params.messageProvider,
-      senderId: params.senderId,
       senderName: params.senderName ?? undefined,
       senderUsername: params.senderUsername ?? undefined,
       senderE164: params.senderE164 ?? undefined,
       agentAccountId: params.accountId ?? undefined,
-      currentChannelId: params.currentChannelId,
-      currentThreadTs: params.currentThreadTs,
-      currentMessageId: params.currentMessageId,
       groupId: params.groupId ?? undefined,
       groupChannel: params.groupChannel ?? undefined,
       groupSpace: params.groupSpace ?? undefined,
-      replyToMode: params.replyToMode,
       allowGatewaySubagentBinding: true,
-      modelHasVision: params.modelHasVision,
-      requireExplicitMessageTarget: params.requireExplicitMessageTarget,
-      disableMessageTool: params.disableMessageTool,
     },
     undefined,
     diagnostics.onFilter,
@@ -405,13 +392,7 @@ export function resolveEffectiveToolInventory(
     modelApi: runtimeModelContext.modelApi,
     runtimeModel: runtimeModelContext.runtimeModel,
   });
-  const effectivePolicy = resolveEffectiveToolPolicy({
-    config: params.cfg,
-    agentId,
-    sessionKey: params.sessionKey,
-    modelProvider: params.modelProvider,
-    modelId: params.modelId,
-  });
+  const effectivePolicy = capabilityProfile.policy;
   const profile = effectivePolicy.providerProfile ?? effectivePolicy.profile ?? "full";
   const entries = projectedInventory.entries;
   const notices = [
