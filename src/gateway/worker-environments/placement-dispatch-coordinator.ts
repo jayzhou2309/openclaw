@@ -332,22 +332,22 @@ export function coordinateWorkerPlacementDispatch(
       const admission = reserveSessions([...knownSessionIds]);
       return await admission.hold(
         (async () => {
-          // Preserve known-session order before discovering additional owners; otherwise
-          // overlapping destroys can reserve those owners in reverse order and deadlock.
-          await admission.ready;
           const sessionIds = await service.readEnvironmentSessionIds(environmentId);
-          // Additional owners had neither an attachment nor a live lifecycle operation
-          // targeting this environment at call time. Intervening dispatch cannot replace
-          // a nonterminal owner; redispatch needs a gone environment and a fresh identity.
-          // Active Move/reclaim require an exact attachment; failed cleanup only retires
-          // the old owner. Recovery can resume that owner, still the intended destroy
-          // target, so it is safe to admit it first.
+          // Durable-only owners had no attachment or live operation here at call time.
+          // Skip busy owners: intervening lifecycle writes are CAS-guarded and environment
+          // effects use environment/workspace locks; overlapping destroys are ordered by
+          // a shared phase-1 key. Waiting here while holding phase 1 can deadlock on growth.
           const durableAdmission = reserveSessions(
-            sessionIds.filter((sessionId) => !knownSessionIds.has(sessionId)),
+            sessionIds.filter(
+              (sessionId) =>
+                !knownSessionIds.has(sessionId) &&
+                !sessionTails.has(sessionId) &&
+                !operationsInFlight.has(sessionId),
+            ),
           );
           return await durableAdmission.hold(
             (async () => {
-              await Promise.all([admission.ready, durableAdmission.ready]);
+              await admission.ready;
               return await service.forceDestroyEnvironment(environmentId, onCleanupError);
             })(),
           );
