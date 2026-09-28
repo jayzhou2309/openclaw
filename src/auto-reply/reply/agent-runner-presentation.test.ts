@@ -29,7 +29,7 @@ function normalizeStreamingTextReference(
 ): { text?: string; skip: boolean } {
   let text = payload.text;
   const reply = resolveSendableOutboundReplyParts(payload);
-  if (options.silentExpected) {
+  if (options.silentExpected || text?.trim() === "N") {
     return { skip: true };
   }
   if (!options.isHeartbeat && text?.includes("HEARTBEAT_OK")) {

@@ -26,7 +26,7 @@ export function createAgentTurnPresentation(params: {
   directBlockDeliveries: DirectBlockDelivery[];
   heartbeatState: { didLogStrip: boolean };
 }) {
-  const classifyStreamingPartial = (payload: ReplyPayload): { text?: string; skip: boolean } => {
+  const classifyReplyText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
     let text = payload.text;
     const reply = resolveSendableOutboundReplyParts(payload, { text: "" });
     if (params.turn.followupRun.run.silentExpected) {
@@ -61,6 +61,11 @@ export function createAgentTurnPresentation(params: {
     return { text, skip: false };
   };
 
+  // Previews are cumulative, so a held lead reappears in the next partial or
+  // the final reply once the text diverges from NO_REPLY.
+  const classifyStreamingPartial = (payload: ReplyPayload): { text?: string; skip: boolean } =>
+    payload.text?.trim() === SILENT_REPLY_TOKEN[0] ? { skip: true } : classifyReplyText(payload);
+
   const sanitizeStreamingText = (
     text: string | undefined,
     errorContext: boolean,
@@ -79,7 +84,7 @@ export function createAgentTurnPresentation(params: {
   };
 
   const normalizeStreamingText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
-    const classified = classifyStreamingPartial(payload);
+    const classified = classifyReplyText(payload);
     if (classified.skip || !classified.text) {
       return classified;
     }
