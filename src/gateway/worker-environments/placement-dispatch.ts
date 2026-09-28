@@ -474,6 +474,8 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
   return {
     dispatch,
     forceDestroyEnvironment: abandonment.forceDestroyEnvironment,
+    getEnvironmentAttachedSessionIds: (environmentId: string): readonly string[] =>
+      environments.get(environmentId)?.attachedSessionIds ?? [],
     async readEnvironmentSessionIds(environmentId: string): Promise<string[]> {
       const sessionIds = (await placements.readChangeSnapshot()).map(({ sessionId }) => sessionId);
       const facts = await placements.readProjection(sessionIds, { current: true });

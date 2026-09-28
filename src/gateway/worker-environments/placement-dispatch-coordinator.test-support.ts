@@ -97,6 +97,7 @@ export function createCoordinatorTestService(overrides: Partial<DispatchService>
     move: unexpected,
     reclaim: unexpected,
     forceDestroyEnvironment: unexpected,
+    getEnvironmentAttachedSessionIds: () => [],
     readEnvironmentSessionIds: async () => [],
     reconcile: unexpected,
     reconcileActive: unexpected,

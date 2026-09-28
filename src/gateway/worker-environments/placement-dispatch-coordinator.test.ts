@@ -731,6 +731,119 @@ describe("worker placement dispatch coordinator", () => {
     },
   );
 
+  it.each(["dispatch", "move"] as const)(
+    "reserves attached sessions before the destroy owner read so later %s waits",
+    async (kind) => {
+      const owners = createDeferredCore<string[]>();
+      const admitted = createDeferredCore();
+      const events: string[] = [];
+      const service = {
+        ...createCoordinatorTestService({
+          readEnvironmentSessionIds: () => owners.promise,
+          forceDestroyEnvironment: async () => {
+            events.push("destroy");
+            return createDispatchEnvironmentFixtures().destroyedEnvironment(2);
+          },
+          dispatch: async () => {
+            events.push("dispatch");
+            return ACTIVE_PLACEMENT;
+          },
+          move: async () => {
+            events.push("move");
+            return LOCAL_PLACEMENT;
+          },
+        }),
+        getEnvironmentAttachedSessionIds: () => [REQUEST.sessionId],
+      };
+      const coordinated = coordinateWorkerPlacementDispatch(service, (_request, run) => {
+        const result = run();
+        admitted.resolve();
+        return result;
+      });
+      const destroying = coordinated.forceDestroyEnvironment("worker-active");
+      const later =
+        kind === "dispatch" ? coordinated.dispatch(REQUEST) : coordinated.move(MOVE_REQUEST);
+      await admitted.promise;
+      owners.resolve([REQUEST.sessionId]);
+      await Promise.all([destroying, later]);
+      expect(events).toEqual(["destroy", kind]);
+    },
+  );
+
+  it("releases attached sessions when the destroy owner read fails", async () => {
+    const owners = createDeferredCore<string[]>();
+    const failure = new Error("owner read failed");
+    const dispatch = vi.fn(async (request: WorkerPlacementDispatchRequest) => ({
+      ...ACTIVE_PLACEMENT,
+      ...request,
+    }));
+    const destroy = vi.fn();
+    const service = {
+      ...createCoordinatorTestService({
+        dispatch,
+        readEnvironmentSessionIds: () => owners.promise,
+        forceDestroyEnvironment: destroy,
+      }),
+      getEnvironmentAttachedSessionIds: () => [REQUEST.sessionId],
+    };
+    const coordinated = coordinateWorkerPlacementDispatch(service, (_request, run) => run());
+    const destroying = coordinated.forceDestroyEnvironment("worker-active");
+    const outcome = expect(destroying).rejects.toBe(failure);
+    const later = coordinated.dispatch(REQUEST);
+    await coordinated.dispatch({ ...REQUEST, sessionId: "unrelated" });
+    const beforeFailure = dispatch.mock.calls.map(([request]) => request.sessionId);
+    owners.reject(failure);
+    await Promise.all([outcome, later]);
+    expect(beforeFailure).toEqual(["unrelated"]);
+    expect(dispatch.mock.calls.map(([request]) => request.sessionId)).toEqual([
+      "unrelated",
+      REQUEST.sessionId,
+    ]);
+    expect(destroy).not.toHaveBeenCalled();
+  });
+
+  it("reserves a live placement before the destroy owner read even without an attachment", async () => {
+    const dispatchEntered = createDeferredCore();
+    const finishDispatch = createDeferredCore();
+    const owners = createDeferredCore<string[]>();
+    const events: string[] = [];
+    const coordinated = coordinateWorkerPlacementDispatch(
+      createCoordinatorTestService({
+        dispatch: async (request, report) => {
+          if (request.sessionId === REQUEST.sessionId) {
+            report?.({ ...PROVISIONING_PLACEMENT, ...request });
+            dispatchEntered.resolve();
+            await finishDispatch.promise;
+            return { ...ACTIVE_PLACEMENT, environmentId: PROVISIONING_PLACEMENT.environmentId };
+          }
+          return { ...ACTIVE_PLACEMENT, ...request };
+        },
+        readEnvironmentSessionIds: () => owners.promise,
+        forceDestroyEnvironment: async () => {
+          events.push("destroy");
+          return createDispatchEnvironmentFixtures().destroyedEnvironment(2);
+        },
+        move: async () => {
+          events.push("move");
+          return LOCAL_PLACEMENT;
+        },
+      }),
+      (_request, run) => run(),
+    );
+    const dispatching = coordinated.dispatch(REQUEST);
+    await dispatchEntered.promise;
+    const destroying = coordinated.forceDestroyEnvironment(PROVISIONING_PLACEMENT.environmentId);
+    const moving = coordinated.move(MOVE_REQUEST);
+    finishDispatch.resolve();
+    await dispatching;
+    await coordinated.dispatch({ ...REQUEST, sessionId: "unrelated" });
+    const beforeRead = [...events];
+    owners.resolve([REQUEST.sessionId]);
+    await Promise.all([destroying, moving]);
+    expect(beforeRead).toEqual([]);
+    expect(events).toEqual(["destroy", "move"]);
+  });
+
   it("holds every environment owner through force destroy and releases failed multi-session work", async () => {
     const entered = createDeferredCore();
     const release = createDeferredCore();
@@ -742,6 +855,7 @@ describe("worker placement dispatch coordinator", () => {
     const coordinated = coordinateWorkerPlacementDispatch(
       createCoordinatorTestService({
         dispatch,
+        getEnvironmentAttachedSessionIds: () => ["attached-session"],
         readEnvironmentSessionIds: async () => [REQUEST.sessionId, "attached-session"],
         forceDestroyEnvironment: async () => {
           entered.resolve();

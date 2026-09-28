@@ -319,12 +319,35 @@ export function coordinateWorkerPlacementDispatch(
       return await operation;
     },
     forceDestroyEnvironment: async (environmentId, onCleanupError) => {
-      const sessionIds = await service.readEnvironmentSessionIds(environmentId);
-      const admission = reserveSessions(sessionIds);
+      const knownSessionIds = new Set(service.getEnvironmentAttachedSessionIds(environmentId));
+      for (const [sessionId, operations] of operationsInFlight) {
+        if (
+          [...operations].some(
+            (operation) => operation.currentPlacement()?.environmentId === environmentId,
+          )
+        ) {
+          knownSessionIds.add(sessionId);
+        }
+      }
+      const admission = reserveSessions([...knownSessionIds]);
       return await admission.hold(
         (async () => {
-          await admission.ready;
-          return await service.forceDestroyEnvironment(environmentId, onCleanupError);
+          const sessionIds = await service.readEnvironmentSessionIds(environmentId);
+          // Additional owners had neither an attachment nor a live lifecycle operation
+          // targeting this environment at call time. Intervening dispatch cannot replace
+          // a nonterminal owner; redispatch needs a gone environment and a fresh identity.
+          // Active Move/reclaim require an exact attachment; failed cleanup only retires
+          // the old owner. Recovery can resume that owner, still the intended destroy
+          // target, so it is safe to admit it first.
+          const durableAdmission = reserveSessions(
+            sessionIds.filter((sessionId) => !knownSessionIds.has(sessionId)),
+          );
+          return await durableAdmission.hold(
+            (async () => {
+              await Promise.all([admission.ready, durableAdmission.ready]);
+              return await service.forceDestroyEnvironment(environmentId, onCleanupError);
+            })(),
+          );
         })(),
       );
     },
@@ -416,6 +439,8 @@ export function coordinateWorkerPlacementDispatch(
       registerOperation({ kind: "reclaim", request, ...tracked });
       return await operation;
     },
+    getEnvironmentAttachedSessionIds: (environmentId) =>
+      service.getEnvironmentAttachedSessionIds(environmentId),
     readEnvironmentSessionIds: (environmentId) => service.readEnvironmentSessionIds(environmentId),
     reconcile: (mode) => runReconciliation(() => service.reconcile(mode, tryRecovery)),
     reconcileActive: (environmentId) =>

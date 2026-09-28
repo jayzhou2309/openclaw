@@ -138,6 +138,7 @@ async function withRecoveryRuntime(
     runtimeMocks.createDispatch.mockImplementation(() => ({
       dispatch: vi.fn(),
       forceDestroyEnvironment: runtimeMocks.destroyEnvironment,
+      getEnvironmentAttachedSessionIds: () => [],
       readEnvironmentSessionIds: async (environmentId: string) =>
         [...placements.values()]
           .filter((placement) => placement.environmentId === environmentId)
