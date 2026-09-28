@@ -584,6 +584,17 @@ describe("agent runner streaming presentation", () => {
     }
   });
 
+  it("holds a lone N preview until it diverges from NO_REPLY (#122476)", () => {
+    const presentation = createPresentation();
+
+    expect(presentation.classifyStreamingPartial({ text: "N" })).toEqual({ skip: true });
+    expect(presentation.classifyStreamingPartial({ text: "No, that is wrong." })).toEqual({
+      text: "No, that is wrong.",
+      skip: false,
+    });
+    expect(presentation.normalizeStreamingText({ text: "N" })).toEqual({ text: "N", skip: false });
+  });
+
   it("keeps silent-expected and heartbeat-run classification eager", () => {
     const silentPresentation = createPresentation({ silentExpected: true });
     expect(silentPresentation.classifyStreamingPartial({ text: "visible" })).toEqual({
