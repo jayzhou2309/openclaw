@@ -770,6 +770,40 @@ describe("worker placement dispatch coordinator", () => {
     },
   );
 
+  it("settles overlapping destroys in order when later durable owners resolve first", async () => {
+    const firstReadEntered = createDeferredCore();
+    const firstOwners = createDeferredCore<string[]>();
+    const secondOwners = createDeferredCore<string[]>();
+    const firstCleanup = vi.fn();
+    const secondCleanup = vi.fn();
+    const events: string[] = [];
+    let reads = 0;
+    const coordinated = coordinateWorkerPlacementDispatch(
+      createCoordinatorTestService({
+        getEnvironmentAttachedSessionIds: () => [REQUEST.sessionId],
+        readEnvironmentSessionIds: () => {
+          if (reads++ === 0) {
+            firstReadEntered.resolve();
+            return firstOwners.promise;
+          }
+          return secondOwners.promise;
+        },
+        forceDestroyEnvironment: async (_environmentId, onCleanupError) => {
+          events.push(onCleanupError === firstCleanup ? "first" : "second");
+          return createDispatchEnvironmentFixtures().destroyedEnvironment(2);
+        },
+      }),
+      (_request, run) => run(),
+    );
+    const first = coordinated.forceDestroyEnvironment("worker-active", firstCleanup);
+    await firstReadEntered.promise;
+    const second = coordinated.forceDestroyEnvironment("worker-active", secondCleanup);
+    secondOwners.resolve([REQUEST.sessionId, "durable-owner"]);
+    firstOwners.resolve([REQUEST.sessionId, "durable-owner"]);
+    await Promise.all([first, second]);
+    expect(events).toEqual(["first", "second"]);
+  });
+
   it("releases attached sessions when the destroy owner read fails", async () => {
     const owners = createDeferredCore<string[]>();
     const failure = new Error("owner read failed");

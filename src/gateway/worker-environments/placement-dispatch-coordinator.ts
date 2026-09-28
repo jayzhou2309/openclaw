@@ -332,6 +332,9 @@ export function coordinateWorkerPlacementDispatch(
       const admission = reserveSessions([...knownSessionIds]);
       return await admission.hold(
         (async () => {
+          // Preserve known-session order before discovering additional owners; otherwise
+          // overlapping destroys can reserve those owners in reverse order and deadlock.
+          await admission.ready;
           const sessionIds = await service.readEnvironmentSessionIds(environmentId);
           // Additional owners had neither an attachment nor a live lifecycle operation
           // targeting this environment at call time. Intervening dispatch cannot replace
