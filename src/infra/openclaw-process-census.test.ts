@@ -101,14 +101,34 @@ it("preserves a retained runtime used by an orphaned eval worker", () => {
   expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [peer] });
 });
 
-it("reports an unclassified PID instead of claiming it is OpenClaw", () => {
+it("does not turn an unavailable cwd into custody when argv is readable", () => {
   rows.set(peer, { ppid: 1, argv: ["node", "dist/index.js"] });
   readlink.mockImplementation(() => {
     throw Object.assign(new Error("permission denied"), { code: "EACCES" });
   });
-  expect(inspectOtherOpenClawProcesses()).toEqual({
-    error: expect.stringContaining(`Could not classify PID ${peer}:`),
-  });
+  expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [] });
+});
+
+it.each([
+  ["bun", "run", "--silent", "start"],
+  ["node", "--foreign-runtime-option", "service.js"],
+])("ignores unfamiliar readable foreign argv %j", (...argv) => {
+  rows.set(peer, { ppid: 1, argv, cwd: "/unrelated-app" });
+  expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [] });
+});
+
+it.each([
+  "/tmp/openclaw-plugin-build-abc123/package",
+  "/tmp/openclaw-model-catalog-abc123",
+  "/tmp/openclaw-update-runtime-Ab1234/tree/2f/app",
+])("preserves an unfamiliar runtime with custody in cwd %s", (cwd) => {
+  for (const argv of [
+    ["bun", "run", "--silent", "start"],
+    ["node", "/vendor/worker.js"],
+  ]) {
+    rows.set(peer, { ppid: 1, argv, cwd });
+    expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [peer] });
+  }
 });
 
 it("recognizes an owned service marker without guessing from its script name", () => {
@@ -138,6 +158,10 @@ it.each([
   ["/tmp/openclaw-plugin-build-abc123/node_modules/vendor/codex"],
   ["/usr/bin/node", "/tmp/openclaw-plugin-build-abc123/node_modules/tool/cli.js"],
   ["node", "--import=/tmp/openclaw-plugin-build-abc123/loader.js", "app.js"],
+  ["bun", "run", "--silent", "/tmp/openclaw-plugin-build-abc123/script.js"],
+  ["node", "--foreign-runtime-option", "/tmp/openclaw-update-runtime-Ab1234/script.js"],
+  ["bun", "run", "--silent", "start", "--config=openclaw-plugin-build-abc123/config.json"],
+  ["node", "--foreign-runtime-option", "--runtime=openclaw-update-runtime-Ab1234/script.js"],
   ["node", "openclaw-plugin-build-abc123/script.js"],
   ["node", "/tmp/openclaw-model-catalog-abc123/worker.cjs"],
 ])("recognizes live command identity %j", (...argv) => {
@@ -251,4 +275,24 @@ it("does not authorize cleanup without exact argv inspection on win32", () => {
     error: expect.stringContaining("Exact process command census is unavailable on win32"),
   });
   expect(census).not.toHaveBeenCalled();
+});
+
+it("retains Darwin cwd holders from one partial batch without trusting other PID records", () => {
+  mockProcessPlatform("darwin");
+  rows.set(peer, { ppid: 1, argv: ["node", "/vendor/worker.js"] });
+  rows.set(peer + 1, { ppid: 1, argv: ["bun", "run", "--silent", "start"] });
+  census.mockImplementation((command: string) =>
+    command.endsWith("lsof")
+      ? {
+          status: 1,
+          stdout: `p${peer}\0fcwd\0n/tmp/openclaw-plugin-build-abc123/package\0\np999999999\0n/tmp/openclaw-update-runtime-Ab1234\0\np${peer + 1}\0n/tmp/unrelated\0`,
+        }
+      : {
+          status: 0,
+          stdout: [...rows].map(([pid, row]) => `${pid} ${self} S ${row.ppid} 501`).join("\n"),
+        },
+  );
+  darwinCommand.mockImplementation((pid: number) => ({ argv: rows.get(pid)!.argv }));
+  expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [peer] });
+  expect(census.mock.calls.filter(([command]) => command.endsWith("lsof"))).toHaveLength(1);
 });

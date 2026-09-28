@@ -50,34 +50,61 @@ type ClassificationOptions = {
   requirePackageIdentity?: boolean;
 };
 
-function readProcessWorkingDirectory(pid: number): string | undefined {
-  if (!Number.isSafeInteger(pid) || pid <= 0) {
-    return undefined;
+export function readProcessWorkingDirectories(pids: readonly number[]): Map<number, string> {
+  const requested = new Set(pids.filter((pid) => Number.isSafeInteger(pid) && pid > 0));
+  const directories = new Map<number, string>();
+  if (requested.size === 0) {
+    return directories;
+  }
+  if (process.platform === "linux") {
+    for (const pid of requested) {
+      try {
+        directories.set(pid, fs.readlinkSync(`/proc/${pid}/cwd`));
+      } catch {
+        // A disappearing or inaccessible PID does not erase another PID's evidence.
+      }
+    }
+    return directories;
   }
   try {
-    if (process.platform === "linux") {
-      return fs.readlinkSync(`/proc/${pid}/cwd`);
-    }
     if (process.platform === "darwin") {
-      const result = spawnSync("/usr/sbin/lsof", ["-a", "-p", String(pid), "-d", "cwd", "-F0n"], {
-        encoding: "utf8",
-        timeout: 1_000,
-        maxBuffer: 64 * 1024,
-        env: resolveDiagnosticProcessEnv(),
-      });
-      if (result.error || result.status !== 0) {
-        return undefined;
+      const result = spawnSync(
+        "/usr/sbin/lsof",
+        ["-a", "-p", [...requested].join(","), "-d", "cwd", "-F0pn"],
+        {
+          encoding: "utf8",
+          timeout: 5_000,
+          maxBuffer: 4 * 1024 * 1024,
+          env: resolveDiagnosticProcessEnv(),
+        },
+      );
+      // Exit 1 can accompany useful records when another selected PID disappears.
+      if (result.error || (result.status !== 0 && result.status !== 1)) {
+        return directories;
       }
-      const fields = result.stdout.split("\0").map((field) => field.replace(/^\n/, ""));
-      const names = fields.filter((field) => field.startsWith("n"));
-      if (fields[0] === `p${pid}` && names.length === 1) {
-        return names[0]!.slice(1);
+      const fields = result.stdout.split("\0");
+      fields.pop(); // Only complete NUL-terminated fields establish a path.
+      const ambiguous = new Set<number>();
+      let pid: number | undefined;
+      for (const raw of fields) {
+        const field = raw.replace(/^\n/, "");
+        if (field.startsWith("p")) {
+          const candidate = /^p(\d+)$/.exec(field);
+          pid = candidate && requested.has(Number(candidate[1])) ? Number(candidate[1]) : undefined;
+        } else if (pid !== undefined && field.startsWith("n") && path.isAbsolute(field.slice(1))) {
+          if (directories.has(pid)) {
+            directories.delete(pid);
+            ambiguous.add(pid);
+          } else if (!ambiguous.has(pid)) {
+            directories.set(pid, field.slice(1));
+          }
+        }
       }
     }
   } catch {
     // An inaccessible cwd never licenses resolving against this inspector's cwd.
   }
-  return undefined;
+  return directories;
 }
 
 /** Generic script names identify OpenClaw only inside a verified package root. */
@@ -102,7 +129,10 @@ function classifyEntrypoint(
   let scriptPath = script;
   if (!path.isAbsolute(script)) {
     const cwd =
-      opts.cwd ?? (opts.pid === undefined ? undefined : readProcessWorkingDirectory(opts.pid));
+      opts.cwd ??
+      (opts.pid === undefined
+        ? undefined
+        : readProcessWorkingDirectories([opts.pid]).get(opts.pid));
     if (!cwd || !path.isAbsolute(cwd)) {
       return { kind: "unclassified", reason: `working directory is unavailable for ${script}` };
     }
