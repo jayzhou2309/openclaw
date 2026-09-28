@@ -11,13 +11,12 @@ export function startGatewayTlsRenewal(params: {
   runtime: GatewayTlsRuntime;
   servers: readonly HttpServer[];
   enabled: boolean;
-  isClosing: () => boolean;
   onRenewed: () => Promise<void>;
   log: { info: (message: string) => void; warn: (message: string) => void };
 }) {
   const { runtime, scheduler } = params;
   const options = runtime.tlsOptions;
-  if (!runtime.enabled || !options || params.isClosing() || scheduler.signal.aborted) {
+  if (!runtime.enabled || !options || scheduler.signal.aborted) {
     return undefined;
   }
   const paths = [runtime.certPath, runtime.keyPath, runtime.caPath].filter(
@@ -29,12 +28,12 @@ export function startGatewayTlsRenewal(params: {
   let refreshJob: GatewayScheduledJob | undefined;
   let pending = Promise.resolve();
   const isCurrent = (expected: number) =>
-    !stopped && enabled && !params.isClosing() && !scheduler.signal.aborted && epoch === expected;
+    !stopped && enabled && !scheduler.signal.aborted && epoch === expected;
   const requestRefresh = () => {
     const expected = ++epoch;
     refreshJob?.cancel();
     if (!isCurrent(expected)) {
-      if (!stopped && !enabled && !params.isClosing()) {
+      if (!stopped && !enabled && !scheduler.signal.aborted) {
         params.log.info("gateway TLS renewal deferred (gateway.reload.mode=off)");
       }
       return;
@@ -42,9 +41,8 @@ export function startGatewayTlsRenewal(params: {
     refreshJob = scheduler.schedule({
       id: "gateway:tls-renewal",
       delayMs: 300,
-      run: () => {
-        refreshJob = undefined;
-        pending = pending
+      run: () =>
+        (pending = pending
           .then(async () => {
             if (!isCurrent(expected)) {
               return;
@@ -85,9 +83,7 @@ export function startGatewayTlsRenewal(params: {
                 `gateway TLS renewal failed; keeping accepted material: ${String(error)}`,
               );
             }
-          });
-        return pending;
-      },
+          })),
     });
   };
   // Inode watches miss certificate symlinks and projected-secret directory swaps.
@@ -105,7 +101,6 @@ export function startGatewayTlsRenewal(params: {
     },
     async stop() {
       stopped = true;
-      epoch += 1;
       refreshJob?.cancel();
       for (const path of paths) {
         unwatchFile(path, requestRefresh);

@@ -47,7 +47,6 @@ function createRenewal() {
     runtime,
     servers: [server],
     enabled: true,
-    isClosing: () => false,
     onRenewed,
     log: { info: vi.fn(), warn: vi.fn() },
   });
