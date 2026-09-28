@@ -30,28 +30,31 @@ function coordinate(harness: ReturnType<typeof createHarness>) {
   return coordinateWorkerPlacementDispatch(harness.service, (_request, run) => run());
 }
 
-function observeTargetedAdmission(
-  harness: ReturnType<typeof createHarness>,
-  placements: ReturnType<typeof createStore>,
-) {
-  const unitReached = createDeferredCore();
-  const reconcile = harness.service.reconcileActive;
-  vi.spyOn(harness.service, "reconcileActive").mockImplementation((environmentId, admit) =>
-    reconcile(environmentId, (sessionIds, run) => {
-      if (!admit) {
-        throw new Error("Recovery requires coordinator admission");
-      }
-      const operation = admit(sessionIds, run);
-      unitReached.resolve();
-      return operation;
-    }),
-  );
+function prepareTargetedAdmissionObserver(placements: ReturnType<typeof createStore>) {
+  // The harness copies store methods. Install the spy before construction, then
+  // arm it only when the test reaches its recovery observation boundary.
   const read = placements.readProjection.bind(placements);
-  const reads = vi.spyOn(placements, "readProjection").mockImplementation((...args) => {
-    unitReached.resolve();
-    return read(...args);
-  });
-  return { unitReached: unitReached.promise, reads };
+  const reads = vi.spyOn(placements, "readProjection");
+  return (harness: ReturnType<typeof createHarness>) => {
+    const unitReached = createDeferredCore();
+    const reconcile = harness.service.reconcileActive;
+    vi.spyOn(harness.service, "reconcileActive").mockImplementation((environmentId, admit) =>
+      reconcile(environmentId, (sessionIds, run) => {
+        if (!admit) {
+          throw new Error("Recovery requires coordinator admission");
+        }
+        const operation = admit(sessionIds, run);
+        unitReached.resolve();
+        return operation;
+      }),
+    );
+    reads.mockClear();
+    reads.mockImplementation((...args) => {
+      unitReached.resolve();
+      return read(...args);
+    });
+    return { unitReached: unitReached.promise, reads };
+  };
 }
 
 async function git(root: string, ...args: string[]) {
@@ -73,6 +76,8 @@ describe("placement recovery session admission with persisted placements", () =>
     "startup pre-pass leaves %s Stop with its current final-save owner",
     async (state) => {
       const placements = createStore();
+      const claimStop = vi.spyOn(placements, "claimReclaimWorkspaceResult");
+      const reads = vi.spyOn(placements, "readProjection");
       const stopEntered = createDeferredCore();
       const releaseStop = createDeferredCore();
       const environmentEntered = createDeferredCore();
@@ -97,8 +102,6 @@ describe("placement recovery session admission with persisted placements", () =>
         expectedGeneration: active.generation,
       });
       const coordinated = coordinate(harness);
-      const claimStop = vi.spyOn(placements, "claimReclaimWorkspaceResult");
-      const reads = vi.spyOn(placements, "readProjection");
       vi.mocked(harness.environments.reconcileEnvironment).mockImplementation(async () => {
         environmentEntered.resolve();
         await releaseEnvironment.promise;
@@ -145,6 +148,8 @@ describe("placement recovery session admission with persisted placements", () =>
         expectedGeneration: requested.generation,
         recoveryError: "previous attempt",
       });
+      const readCandidates = placements.readRecoveryCandidates.bind(placements);
+      const candidateReads = vi.spyOn(placements, "readRecoveryCandidates");
       const harness = createHarness(support.testState.stateDb, placements, {
         environmentGeneration: 3,
       });
@@ -157,10 +162,9 @@ describe("placement recovery session admission with persisted placements", () =>
         await releaseTunnel.promise;
         return startTunnel(...args);
       });
-      const readCandidates = placements.readRecoveryCandidates.bind(placements);
       let listings = 0;
       let dispatch: ReturnType<typeof coordinated.dispatch> | undefined;
-      vi.spyOn(placements, "readRecoveryCandidates").mockImplementation(async () => {
+      candidateReads.mockImplementation(async () => {
         const candidates = await readCandidates();
         if (++listings === (mode === "startup" ? 2 : 1)) {
           dispatch = coordinated.dispatch(REQUEST);
@@ -186,6 +190,7 @@ describe("placement recovery session admission with persisted placements", () =>
 
   it("targeted recovery reads a dispatch only after its activation settles", async () => {
     const placements = createStore();
+    const observe = prepareTargetedAdmissionObserver(placements);
     const harness = createHarness(support.testState.stateDb, placements);
     const tunnelEntered = createDeferredCore();
     const releaseTunnel = createDeferredCore();
@@ -199,7 +204,7 @@ describe("placement recovery session admission with persisted placements", () =>
     const dispatch = coordinated.dispatch({ ...REQUEST, executionMode: "remote-exec" });
     void dispatch.catch(tunnelEntered.reject);
     await tunnelEntered.promise;
-    const observation = observeTargetedAdmission(harness, placements);
+    const observation = observe(harness);
     const sweep = coordinated.reconcileActive(harness.ready.environmentId);
     try {
       await observation.unitReached;
@@ -218,6 +223,7 @@ describe("placement recovery session admission with persisted placements", () =>
     "%s recovery does not expire a live Move while destination admission still sees local placement",
     async (mode) => {
       const placements = createStore();
+      const observe = prepareTargetedAdmissionObserver(placements);
       const harness = createHarness(support.testState.stateDb, placements, {
         workspacePath: support.testState.root,
       });
@@ -249,7 +255,7 @@ describe("placement recovery session admission with persisted placements", () =>
         await localEntered.promise;
         const intent = placements.getPlacementMove(REQUEST.sessionId);
         expect(placements.get(REQUEST.sessionId)?.state).toBe("local");
-        const observation = observeTargetedAdmission(harness, placements);
+        const observation = observe(harness);
         sweep = coordinated.reconcileActive(mode === "targeted" ? active.environmentId : undefined);
         if (mode === "targeted") {
           await observation.unitReached;
@@ -272,6 +278,8 @@ describe("placement recovery session admission with persisted placements", () =>
 
   it("reads pending results after a same-session Stop has settled", async () => {
     const placements = createStore();
+    const observe = prepareTargetedAdmissionObserver(placements);
+    const abandon = vi.spyOn(placements, "abandonWorkspaceResult");
     const reconciliationEntered = createDeferredCore();
     const releaseReconciliation = createDeferredCore();
     const harness = createHarness(support.testState.stateDb, placements, {
@@ -288,8 +296,8 @@ describe("placement recovery session admission with persisted placements", () =>
     void stop.catch(reconciliationEntered.reject);
     await reconciliationEntered.promise;
     expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
-    const observation = observeTargetedAdmission(harness, placements);
-    const abandon = vi.spyOn(placements, "abandonWorkspaceResult");
+    const observation = observe(harness);
+    abandon.mockClear();
     const sweep = coordinated.reconcileActive(active.environmentId!);
     try {
       await observation.unitReached;

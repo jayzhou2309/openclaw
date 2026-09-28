@@ -60,6 +60,8 @@ async function scenario(
   roots.push(root);
   const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
   const placements = createWorkerSessionPlacementStore({ database, now: () => 1000 });
+  const readProjection = placements.readProjection.bind(placements);
+  const projectionReads = pendingMove ? vi.spyOn(placements, "readProjection") : undefined;
   const storePath = path.join(root, "sessions.sqlite");
   const worktreePath = path.join(root, "workspace");
   await fs.mkdir(worktreePath);
@@ -265,9 +267,8 @@ async function scenario(
   }
   const inspectionEntered = createDeferred();
   const releaseInspection = createDeferred();
-  if (blockedInspection && pendingMove) {
-    const readProjection = placements.readProjection.bind(placements);
-    vi.spyOn(placements, "readProjection").mockImplementationOnce(async (...args) => {
+  if (blockedInspection && projectionReads) {
+    projectionReads.mockImplementationOnce(async (...args) => {
       inspectionEntered.resolve();
       await releaseInspection.promise;
       return await readProjection(...args);
