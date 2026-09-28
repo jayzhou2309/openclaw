@@ -747,8 +747,8 @@ summary,
     --shell-popup-inline-gutter: var(--chat-mobile-edge-inset);
   }
 
-  html:has(.shell--chat),
-  body:has(.shell--chat) {
+  html.control-ui-chat-shell,
+  .control-ui-chat-shell body {
     /* iOS Safari exposes the document canvas around its browser chrome; keep
        that canvas on the same semantic surface as the narrow transcript. */
     background: var(--control-ui-system-chrome-background, var(--bg-content, var(--bg)));
