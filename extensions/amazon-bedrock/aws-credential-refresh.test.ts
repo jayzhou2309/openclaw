@@ -199,6 +199,69 @@ describe("Bedrock embedding credential sharing", () => {
       server.close();
     }
   });
+
+  it("resolves a changed credential source before reusing unexpired credentials", async () => {
+    const dir = tempDirs.make("bedrock-expiring-source-");
+    const credentialsFile = path.join(dir, "credentials");
+    const configFile = path.join(dir, "config");
+    await writeFile(configFile, "");
+    for (const name of [
+      "AWS_ACCESS_KEY_ID",
+      "AWS_SECRET_ACCESS_KEY",
+      "AWS_SESSION_TOKEN",
+      "AWS_BEARER_TOKEN_BEDROCK",
+      "AWS_BEDROCK_SKIP_AUTH",
+    ]) {
+      vi.stubEnv(name, undefined);
+    }
+    vi.stubEnv("AWS_PROFILE", "expiring");
+    vi.stubEnv("AWS_SHARED_CREDENTIALS_FILE", credentialsFile);
+    vi.stubEnv("AWS_CONFIG_FILE", configFile);
+    vi.stubEnv("AWS_EC2_METADATA_DISABLED", "true");
+    vi.stubEnv("AWS_REGION", "us-east-1");
+    const expiration = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    const selectPrincipal = async (principal: string) => {
+      const script = path.join(dir, `credentials-${principal}.mjs`);
+      await writeFile(
+        script,
+        `console.log(${JSON.stringify(
+          JSON.stringify({
+            Version: 1,
+            AccessKeyId: `TEST_${principal}`,
+            SecretAccessKey: "synthetic-secret",
+            SessionToken: "synthetic-token",
+            Expiration: expiration,
+          }),
+        )});\n`,
+      );
+      await writeFile(
+        credentialsFile,
+        `[expiring]\ncredential_process = "${process.execPath}" "${script}"\n`,
+      );
+    };
+    const resolved: string[] = [];
+    const pendingCredentials: Promise<void>[] = [];
+    vi.spyOn(BedrockRuntimeClient.prototype, "send").mockImplementation(function (
+      this: BedrockRuntimeClient,
+    ) {
+      pendingCredentials.push(
+        this.config.credentials().then(({ accessKeyId }) => {
+          resolved.push(accessKeyId);
+        }),
+      );
+      return { $metadata: {}, body: new TextEncoder().encode('{"embedding":[1,0]}') };
+    });
+
+    await selectPrincipal("A");
+    const { provider } = await createBedrockEmbeddingProvider({ config: {}, model: "" });
+    await provider.embed("before");
+    await Promise.all(pendingCredentials);
+    await selectPrincipal("B");
+    await provider.embed("after");
+    await Promise.all(pendingCredentials);
+
+    expect(resolved).toEqual(["TEST_A", "TEST_B"]);
+  });
 });
 
 describe("Bedrock credential resolution cancellation", () => {

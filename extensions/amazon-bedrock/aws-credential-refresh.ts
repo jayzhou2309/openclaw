@@ -1,3 +1,6 @@
+import { readFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { BedrockRuntimeClientConfig } from "@aws-sdk/client-bedrock-runtime";
 import type { DefaultProviderInit, defaultProvider } from "@aws-sdk/credential-provider-node";
 
@@ -15,26 +18,54 @@ export function bedrockCredentialDefaultProvider(init: DefaultProviderInit) {
 
 type CredentialProvider = ReturnType<typeof bedrockCredentialDefaultProvider>;
 
+/** Everything the default chain reads to pick a credential source. */
+async function credentialSourceKey(init: DefaultProviderInit): Promise<string> {
+  const env = Object.entries(process.env)
+    .filter(([name]) => name.startsWith("AWS_"))
+    .toSorted(([a], [b]) => a.localeCompare(b));
+  const files = await Promise.all(
+    [
+      process.env.AWS_SHARED_CREDENTIALS_FILE ?? path.join(os.homedir(), ".aws", "credentials"),
+      process.env.AWS_CONFIG_FILE ?? path.join(os.homedir(), ".aws", "config"),
+    ].map((file) => readFile(file, "utf8").catch(() => "")),
+  );
+  return JSON.stringify([init.profile, env, files]);
+}
+
 /**
  * Share one credential lookup across per-request clients. Credentials with an
- * expiration (instance role, SSO) are reused until near expiry; ones without
+ * expiration (instance role, SSO) are reused until near expiry, as long as the
+ * env and shared files that select their source are unchanged. Ones without
  * are resolved per request so rotated profile files still apply. Each lookup
  * gets a fresh SDK chain because the chain memoizes non-expiring credentials.
  */
 export function sharedBedrockCredentialDefaultProvider(): typeof bedrockCredentialDefaultProvider {
-  let cached: Awaited<ReturnType<CredentialProvider>> | undefined;
-  let pending: ReturnType<CredentialProvider> | undefined;
+  let cached: { key: string; credentials: Awaited<ReturnType<CredentialProvider>> } | undefined;
+  let pending: { key: string; credentials: ReturnType<CredentialProvider> } | undefined;
   return (init) =>
     async (...args) => {
-      if (cached?.expiration && cached.expiration.getTime() - Date.now() > 5 * 60 * 1000) {
-        return cached;
+      const key = await credentialSourceKey(init);
+      const expiration = cached?.key === key ? cached.credentials.expiration : undefined;
+      if (cached && expiration && expiration.getTime() - Date.now() > 5 * 60 * 1000) {
+        return cached.credentials;
       }
-      pending ??= bedrockCredentialDefaultProvider(init)(...args)
-        .then((credentials) => (cached = credentials))
-        .finally(() => {
-          pending = undefined;
-        });
-      return pending;
+      if (pending?.key !== key) {
+        const lookup = {
+          key,
+          credentials: bedrockCredentialDefaultProvider(init)(...args)
+            .then((credentials) => {
+              cached = { key, credentials };
+              return credentials;
+            })
+            .finally(() => {
+              if (pending === lookup) {
+                pending = undefined;
+              }
+            }),
+        };
+        pending = lookup;
+      }
+      return pending.credentials;
     };
 }
 
