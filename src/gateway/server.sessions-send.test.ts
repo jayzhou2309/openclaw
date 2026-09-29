@@ -311,7 +311,7 @@ describe("sessions_send gateway loopback", () => {
     );
   });
 
-  it("carries the reply turn counter in the current turn over transport", async () => {
+  it("keeps the reply turn counter out of the recorded turn over transport", async () => {
     const requester = "agent:main:main";
     const target = "agent:main:dashboard:a2a-peer";
     await writeSessionStore({
@@ -360,13 +360,16 @@ describe("sessions_send gateway loopback", () => {
       step.extraSystemPrompt?.includes("Agent-to-agent reply step"),
     );
     expect(replyStep?.sessionKey).toBe(requester);
-    // Model-visible current turn: the message plus any in-process runtime fragments.
-    const currentTurn = [
+    const modelInput = [
+      replyStep?.extraSystemPrompt,
       replyStep?.message,
       ...(replyStep?.runtimeContextFragments ?? []).map((fragment) => fragment.text),
     ].join("\n");
-    expect(currentTurn).toContain("Agent-to-agent reply turn 1 of 5.");
-    expect(replyStep?.extraSystemPrompt).not.toMatch(/turn \d+ of \d+/i);
+    expect(modelInput).toContain("Agent-to-agent reply turn 1 of 5.");
+    const recorded = await replyStep?.userTurnTranscriptRecorder?.resolveMessage();
+    expect(recorded).toMatchObject({ role: "user", content: replyStep?.message });
+    expect(replyStep?.message).toMatch(/peer response$/);
+    expect(replyStep?.message).not.toContain("turn 1 of 5");
   });
 
   it(

@@ -68,7 +68,7 @@ type AgentToolGatewayRequest = Pick<
 > & {
   agentRunTracking?: GatewayAgentRunTaskOwner;
   agentToolCaller?: TrustedAgentToolCaller;
-  /** Current-turn context for an agent run; transport appends its text to the message. */
+  /** Current-turn context for an agent run; transport appends its text to the system prompt. */
   runtimeContextFragments?: RuntimeContextFragment[];
   /** Target policy checked at the mutation boundary, not after its own committed change. */
   sessionMutationCommitGuard?: () => void;
@@ -256,19 +256,22 @@ async function callAgentToolGatewayRequestBound<T>(
       ...wireRequest
     } = request;
     const wireParams = wireRequest.params;
+    // The wire has no runtime-only turn carrier, and `message` becomes the persisted user turn.
     const params =
       method === "agent" &&
       runtimeContextFragments?.length &&
       typeof wireParams === "object" &&
-      wireParams !== null &&
-      "message" in wireParams &&
-      typeof wireParams.message === "string"
+      wireParams !== null
         ? {
             ...wireParams,
-            message: [
-              wireParams.message,
+            extraSystemPrompt: [
+              "extraSystemPrompt" in wireParams && typeof wireParams.extraSystemPrompt === "string"
+                ? wireParams.extraSystemPrompt
+                : undefined,
               ...runtimeContextFragments.map((fragment) => fragment.text),
-            ].join("\n\n"),
+            ]
+              .filter(Boolean)
+              .join("\n\n"),
           }
         : wireParams;
     return await runBoundInProcessGatewayCall(
