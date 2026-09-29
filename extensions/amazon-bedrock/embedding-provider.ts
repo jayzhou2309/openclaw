@@ -13,7 +13,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { bedrockCredentialDefaultProvider } from "./aws-credential-refresh.js";
+import { sharedBedrockCredentialDefaultProvider } from "./aws-credential-refresh.js";
 
 // ---------------------------------------------------------------------------
 // Types & constants
@@ -311,9 +311,10 @@ export async function createBedrockEmbeddingProvider(
     family,
   });
 
+  const credentialDefaultProvider = sharedBedrockCredentialDefaultProvider();
   const invoke = async (body: string, signal?: AbortSignal): Promise<Uint8Array | undefined> => {
     const sdk = new BedrockRuntimeClient({
-      credentialDefaultProvider: bedrockCredentialDefaultProvider,
+      credentialDefaultProvider,
       region: client.region,
       endpoint: client.endpoint,
       useFipsEndpoint: client.useFipsEndpoint,
