@@ -4054,6 +4054,8 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       thinkingLevel: "high",
       reasoningLevel: "low",
       label: "telegram-priority",
+      category: "Channels",
+      pinnedAt: 123,
     } as const;
     const cases = await runExplicitResetCases({
       storePath,
