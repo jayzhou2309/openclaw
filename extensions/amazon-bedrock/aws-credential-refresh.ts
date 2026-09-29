@@ -18,27 +18,24 @@ type CredentialProvider = ReturnType<typeof bedrockCredentialDefaultProvider>;
 /**
  * Share one credential lookup across per-request clients. Credentials with an
  * expiration (instance role, SSO) are reused until near expiry; ones without
- * are resolved per request so rotated profile files still apply.
+ * are resolved per request so rotated profile files still apply. Each lookup
+ * gets a fresh SDK chain because the chain memoizes non-expiring credentials.
  */
 export function sharedBedrockCredentialDefaultProvider(): typeof bedrockCredentialDefaultProvider {
-  let chain: CredentialProvider | undefined;
   let cached: Awaited<ReturnType<CredentialProvider>> | undefined;
   let pending: ReturnType<CredentialProvider> | undefined;
-  return (init) => {
-    chain ??= bedrockCredentialDefaultProvider(init);
-    const resolve = chain;
-    return async (...args) => {
+  return (init) =>
+    async (...args) => {
       if (cached?.expiration && cached.expiration.getTime() - Date.now() > 5 * 60 * 1000) {
         return cached;
       }
-      pending ??= resolve(...args)
+      pending ??= bedrockCredentialDefaultProvider(init)(...args)
         .then((credentials) => (cached = credentials))
         .finally(() => {
           pending = undefined;
         });
       return pending;
     };
-  };
 }
 
 /** Preserve explicit proxy and bearer authentication ahead of the default AWS chain. */

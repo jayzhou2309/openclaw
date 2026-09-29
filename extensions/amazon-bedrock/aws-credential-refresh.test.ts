@@ -33,7 +33,7 @@ const model = {
 };
 
 describe("Bedrock shared credential rotation", () => {
-  it.each(["stream", "embeddings", "discovery"] as const)(
+  it.each(["stream", "embeddings", "embeddings on one provider", "discovery"] as const)(
     "%s resolves rotated credentials through its own SDK chain",
     async (route) => {
       const dir = tempDirs.make("bedrock-credential-rotation-");
@@ -84,6 +84,9 @@ describe("Bedrock shared credential rotation", () => {
         pendingCredentials.push(capture(this));
         return { $metadata: {}, modelSummaries: [] };
       });
+      let embeddingProvider:
+        | Awaited<ReturnType<typeof createBedrockEmbeddingProvider>>["provider"]
+        | undefined;
       const invoke = async () => {
         if (route === "stream") {
           const result = await streamSimpleBedrock(model, {
@@ -93,6 +96,10 @@ describe("Bedrock shared credential rotation", () => {
         } else if (route === "embeddings") {
           const { provider } = await createBedrockEmbeddingProvider({ config: {}, model: "" });
           await provider.embed("Hello");
+        } else if (route === "embeddings on one provider") {
+          embeddingProvider ??= (await createBedrockEmbeddingProvider({ config: {}, model: "" }))
+            .provider;
+          await embeddingProvider.embed("Hello");
         } else {
           const sdk = await loadBedrockControlPlaneSdk();
           const client = sdk.createClient("us-east-1");
