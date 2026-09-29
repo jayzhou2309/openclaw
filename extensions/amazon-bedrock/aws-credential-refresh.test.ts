@@ -1,4 +1,7 @@
+import { once } from "node:events";
 import { writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { BedrockClient } from "@aws-sdk/client-bedrock";
 import { BedrockRuntimeClient } from "@aws-sdk/client-bedrock-runtime";
@@ -108,6 +111,87 @@ describe("Bedrock shared credential rotation", () => {
       expect(resolved).toEqual(["TEST_A/synthetic-token-A", "TEST_B/synthetic-token-B"]);
     },
   );
+});
+
+describe("Bedrock embedding credential sharing", () => {
+  it("resolves instance-role credentials once across concurrent and later embedding calls", async () => {
+    const imdsRequests: string[] = [];
+    const server = createServer((request, response) => {
+      imdsRequests.push(`${request.method} ${request.url}`);
+      if (request.url === "/latest/api/token") {
+        response.end("imds-token");
+      } else if (request.url === "/latest/meta-data/iam/security-credentials/") {
+        response.end("embedding-role");
+      } else {
+        response.end(
+          JSON.stringify({
+            Code: "Success",
+            Type: "AWS-HMAC",
+            AccessKeyId: "TEST_IMDS",
+            SecretAccessKey: "synthetic-secret",
+            Token: "synthetic-token",
+            Expiration: new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString(),
+          }),
+        );
+      }
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const dir = tempDirs.make("bedrock-imds-sharing-");
+    const emptyFile = path.join(dir, "empty");
+    await writeFile(emptyFile, "");
+    for (const name of [
+      "AWS_ACCESS_KEY_ID",
+      "AWS_SECRET_ACCESS_KEY",
+      "AWS_SESSION_TOKEN",
+      "AWS_PROFILE",
+      "AWS_BEARER_TOKEN_BEDROCK",
+      "AWS_BEDROCK_SKIP_AUTH",
+      "AWS_EC2_METADATA_DISABLED",
+      "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+      "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+      "AWS_WEB_IDENTITY_TOKEN_FILE",
+    ]) {
+      vi.stubEnv(name, undefined);
+    }
+    vi.stubEnv("AWS_SHARED_CREDENTIALS_FILE", emptyFile);
+    vi.stubEnv("AWS_CONFIG_FILE", emptyFile);
+    vi.stubEnv("AWS_REGION", "us-east-1");
+    vi.stubEnv(
+      "AWS_EC2_METADATA_SERVICE_ENDPOINT",
+      `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+    );
+    const resolved: string[] = [];
+    const pendingCredentials: Promise<void>[] = [];
+    vi.spyOn(BedrockRuntimeClient.prototype, "send").mockImplementation(function (
+      this: BedrockRuntimeClient,
+    ) {
+      pendingCredentials.push(
+        this.config.credentials().then(({ accessKeyId }) => {
+          resolved.push(accessKeyId);
+        }),
+      );
+      return { $metadata: {}, body: new TextEncoder().encode('{"embedding":[1,0]}') };
+    });
+
+    try {
+      const { provider } = await createBedrockEmbeddingProvider({ config: {}, model: "" });
+      await provider.embedBatch(Array.from({ length: 20 }, (_, index) => `chunk ${index}`));
+      await Promise.all(pendingCredentials);
+      await provider.embed("later chunk");
+      await Promise.all(pendingCredentials);
+
+      expect(resolved).toEqual(Array.from({ length: 21 }, () => "TEST_IMDS"));
+      expect(imdsRequests).toEqual([
+        "PUT /latest/api/token",
+        "GET /latest/meta-data/iam/security-credentials/",
+        "GET /latest/meta-data/iam/security-credentials/embedding-role",
+      ]);
+    } finally {
+      server.closeAllConnections();
+      server.close();
+    }
+  });
 });
 
 describe("Bedrock credential resolution cancellation", () => {
