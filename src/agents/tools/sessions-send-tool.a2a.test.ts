@@ -44,6 +44,16 @@ function deliveredReceipt(runId: string) {
   };
 }
 
+function announceStepMessage(request: string, roundOneReply: string, latestReply = roundOneReply) {
+  return [
+    "Agent-to-agent announce step.",
+    "",
+    `Original request: ${request}`,
+    `Round 1 reply: ${roundOneReply}`,
+    `Latest reply: ${latestReply}`,
+  ].join("\n");
+}
+
 function firstMockArg(
   mock: { mock: { calls: unknown[][] } },
   label: string,
@@ -326,7 +336,9 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
 
     expect(runAgentStep).toHaveBeenCalledTimes(1);
     const stepInput = firstMockArg(vi.mocked(runAgentStep), "agent step");
-    expect(stepInput.message).toBe("Agent-to-agent announce step.");
+    expect(stepInput.message).toBe(
+      announceStepMessage("Test message", "Substantive channel reply"),
+    );
     expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
   });
 
@@ -440,7 +452,7 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     });
     expect(vi.mocked(runAgentStep).mock.calls[1]?.[0]).toMatchObject({
       sessionKey: "agent:main:discord:channel:target-room",
-      message: "Agent-to-agent announce step.",
+      message: announceStepMessage("Test message", "Result for both conversations"),
     });
     expect(requireGatewayCall("send").params).toMatchObject({
       channel: "discord",
@@ -703,7 +715,7 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     expect(runAgentStep).toHaveBeenCalledOnce();
     expect(firstMockArg(vi.mocked(runAgentStep), "agent step")).toMatchObject({
       sessionKey: targetSessionKey,
-      message: "Agent-to-agent announce step.",
+      message: announceStepMessage("Test message", "Worker completed successfully"),
     });
   });
 
@@ -723,7 +735,9 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
       });
 
       const stepInput = firstMockArg(vi.mocked(runAgentStep), "agent step");
-      expect(stepInput.message).toBe("Agent-to-agent announce step.");
+      expect(stepInput.message).toBe(
+        announceStepMessage("Test message", "Worker completed successfully"),
+      );
       expect(stepInput.transcriptMessage).toBe("");
       expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
     },

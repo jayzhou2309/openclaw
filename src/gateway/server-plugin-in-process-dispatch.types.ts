@@ -1,4 +1,5 @@
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import type { RuntimeContextFragment } from "../agents/internal-runtime-context.js";
 import type { SubagentCompletionToolHandoffRegistration } from "../agents/subagents/announce/subagent-announce-handoff.js";
 import type { PluginSubagentRequesterContext } from "../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
@@ -33,6 +34,7 @@ export type DispatchGatewayMethodInProcessOptions = {
   forceSyntheticClient?: boolean;
   internalDeliveryMediaUrls?: string[];
   internalDeliverySuppressText?: boolean;
+  runtimeContextFragments?: RuntimeContextFragment[];
   nodeInvokeStream?: GatewayNodeInvokeStream;
   nodeInvokeApprovalSessionKey?: string;
   onAccepted?: (payload: unknown) => void;

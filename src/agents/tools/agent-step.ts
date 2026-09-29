@@ -6,6 +6,7 @@ import { annotateInterSessionPromptText } from "../../sessions/input-provenance.
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
+import type { RuntimeContextFragment } from "../internal-runtime-context.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import { waitForAgentRunReply } from "../run-wait.js";
 import {
@@ -54,8 +55,14 @@ export async function runAgentStep(
         transcriptMessage?: undefined;
         deliveryContext?: DeliveryContext;
         expectedSession?: AgentStepSession;
+        runtimeContextFragments?: RuntimeContextFragment[];
       }
-    | { transcriptMessage: string; deliveryContext?: never; expectedSession?: never }
+    | {
+        transcriptMessage: string;
+        deliveryContext?: never;
+        expectedSession?: never;
+        runtimeContextFragments?: never;
+      }
   ),
 ): Promise<string | undefined> {
   const promptedAt = Date.now();
@@ -105,6 +112,7 @@ export async function runAgentStep(
       to: params.deliveryContext?.to,
       threadId: stringifyRouteThreadId(params.deliveryContext?.threadId),
     },
+    runtimeContextFragments: params.runtimeContextFragments,
     timeoutMs: 10_000,
   });
 

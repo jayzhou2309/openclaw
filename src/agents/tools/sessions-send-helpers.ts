@@ -92,38 +92,47 @@ export function buildAgentToAgentReplyContext(params: {
   requesterChannel?: string;
   targetChannel?: string;
   currentRole: "requester" | "target";
-  turn: number;
-  maxTurns: number;
 }) {
   const currentLabel =
     params.currentRole === "requester" ? "Agent 1 (requester)" : "Agent 2 (target)";
   return [
     "Agent-to-agent reply step:",
     `Current agent: ${currentLabel}.`,
-    `Turn ${params.turn} of ${params.maxTurns}.`,
     ...buildAgentSessionLines(params),
     `If you want to stop the ping-pong, reply exactly "${REPLY_SKIP_TOKEN}".`,
   ].join("\n");
+}
+
+export function buildAgentToAgentReplyTurnContext(params: { turn: number; maxTurns: number }) {
+  return `Agent-to-agent reply turn ${params.turn} of ${params.maxTurns}.`;
 }
 
 export function buildAgentToAgentAnnounceContext(params: {
   requesterSessionKey?: string;
   requesterChannel?: string;
   targetChannel?: string;
+}) {
+  return [
+    "Agent-to-agent announce step:",
+    ...buildAgentSessionLines(params),
+    `If you want to remain silent, reply exactly "${ANNOUNCE_SKIP_TOKEN}".`,
+    "Any other reply is recorded in the target session. External delivery is attempted only if the target has a delivery route.",
+    "After this reply, the agent-to-agent conversation is over.",
+  ].join("\n");
+}
+
+export function buildAgentToAgentAnnounceMessage(params: {
   originalMessage: string;
   roundOneReply?: string;
   latestReply?: string;
 }) {
   return [
-    "Agent-to-agent announce step:",
-    ...buildAgentSessionLines(params),
+    "Agent-to-agent announce step.",
+    "",
     `Original request: ${params.originalMessage}`,
     params.roundOneReply
       ? `Round 1 reply: ${params.roundOneReply}`
       : "Round 1 reply: (not available).",
     params.latestReply ? `Latest reply: ${params.latestReply}` : "Latest reply: (not available).",
-    `If you want to remain silent, reply exactly "${ANNOUNCE_SKIP_TOKEN}".`,
-    "Any other reply is recorded in the target session. External delivery is attempted only if the target has a delivery route.",
-    "After this reply, the agent-to-agent conversation is over.",
   ].join("\n");
 }
