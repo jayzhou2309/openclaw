@@ -109,6 +109,34 @@ describe("resolveCronThinkingSelection scoped hydration", () => {
     expect(scopedThinkingCatalogMock).toHaveBeenCalledOnce();
   });
 
+  it("keeps the admitted catalog when native hydration outlasts the foreground wait", async () => {
+    vi.useFakeTimers();
+    try {
+      scopedThinkingCatalogMock.mockReturnValue(new Promise(() => {}));
+      const carried = {
+        provider: "anthropic",
+        id: "claude-opus-5-5",
+        name: "Opus",
+        reasoning: true,
+      };
+      const { resolveCronThinkingSelection } = await import("./model-selection.js");
+      const pending = resolveCronThinkingSelection({
+        cfg: {},
+        owner: { ...owner, modelCatalog: { entries: [carried], routeVariants: [] } },
+        provider: carried.provider,
+        model: carried.id,
+        agentRuntime: "claude-cli",
+        jobThinking: "medium",
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+      const selection = await pending;
+      expect(selection.catalog).toEqual([carried]);
+      expect(selection.requestedThinkLevel).toBe("medium");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps the owner catalog and skips hydration when thinking is off", async () => {
     const { resolveCronThinkingSelection } = await import("./model-selection.js");
     const selection = await resolveCronThinkingSelection({
