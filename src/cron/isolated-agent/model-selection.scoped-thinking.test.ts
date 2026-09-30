@@ -1,8 +1,9 @@
 // Cron turns must hydrate runtime-only model thinking through the provider-scoped helper,
 // never through a full live catalog build.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
-import type { resolveCronThinkingSelection } from "./model-selection.js";
+import { resolveCronThinkingSelection } from "./model-selection.js";
 
 const scopedThinkingCatalogMock = vi.fn(
   async (..._args: unknown[]): Promise<Array<Record<string, unknown>>> => [],
@@ -110,16 +111,16 @@ describe("resolveCronThinkingSelection scoped hydration", () => {
   });
 
   it("keeps the admitted catalog when native hydration outlasts the foreground wait", async () => {
+    const held = createDeferred<Array<Record<string, unknown>>>();
     vi.useFakeTimers();
     try {
-      scopedThinkingCatalogMock.mockReturnValue(new Promise(() => {}));
+      scopedThinkingCatalogMock.mockReturnValue(held.promise);
       const carried = {
         provider: "anthropic",
         id: "claude-opus-5-5",
         name: "Opus",
         reasoning: true,
       };
-      const { resolveCronThinkingSelection } = await import("./model-selection.js");
       const pending = resolveCronThinkingSelection({
         cfg: {},
         owner: { ...owner, modelCatalog: { entries: [carried], routeVariants: [] } },
@@ -128,11 +129,20 @@ describe("resolveCronThinkingSelection scoped hydration", () => {
         agentRuntime: "claude-cli",
         jobThinking: "medium",
       });
+      const completed = vi.fn();
+      void pending.then(completed);
       await vi.advanceTimersByTimeAsync(5_000);
+      expect(completed).toHaveBeenCalledWith(
+        expect.objectContaining({ catalog: [carried], requestedThinkLevel: "medium" }),
+      );
       const selection = await pending;
-      expect(selection.catalog).toEqual([carried]);
-      expect(selection.requestedThinkLevel).toBe("medium");
+      const refreshed = { ...carried, name: "Published native model", reasoning: false };
+      held.resolve([refreshed]);
+      await expect(
+        selection.loadThinkingCatalog(carried.provider, carried.id, "claude-cli"),
+      ).resolves.toEqual([refreshed]);
     } finally {
+      held.resolve([]);
       vi.useRealTimers();
     }
   });
