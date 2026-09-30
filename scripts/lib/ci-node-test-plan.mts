@@ -1569,6 +1569,7 @@ const KEEP_LARGE_NODE_TEST_RUNNER = new Set([
 const RELEASE_ONLY_PLUGIN_SHARDS = new Set(["agentic-plugins"]);
 const RELEASE_ONLY_TOOLING_SHARDS = new Set(["core-tooling"]);
 const RELEASE_ONLY_UI_TEST_FILES = new Set([
+  "ui/src/e2e/activity-run-inspector.real-gateway.e2e.test.ts",
   "ui/src/e2e/board-fixture.e2e.test.ts",
   "ui/src/e2e/chat-attachment-menu.e2e.test.ts",
   "ui/src/e2e/chat-mobile-bubble-margin.e2e.test.ts",
@@ -4528,6 +4529,7 @@ function createCompactNodeTestShardBundles(
   splitHostedToolingTails = false,
   hostedToolingTailBudgets?: ReadonlyMap<string, number>,
   hostedToolingTailDonation?: HostedToolingTailDonation,
+  prioritizeSerialGateway = false,
 ): CompactNodeTestShard[] {
   if (options.runnerBackend === "runson") {
     // Hybrid owns placement and measured serial packing; RunsOn only extracts cron.
@@ -4540,6 +4542,7 @@ function createCompactNodeTestShardBundles(
         splitHostedToolingTails,
         hostedToolingTailBudgets,
         hostedToolingTailDonation,
+        prioritizeSerialGateway,
       ),
       options.compactNodeJobCap ?? COMPACT_NODE_TEST_JOB_CAP,
     );
@@ -4824,10 +4827,16 @@ function createCompactNodeTestShardBundles(
     const usesBlacksmithRunner = usesBlacksmithCapacity(groups[0].runner);
     // Admit the final groups with their shared prerequisite. Rebalancing after
     // this check can break build sharing and exceed a bin's admitted cap.
+    // Retry over-cap hybrid plans with Gateway first; leave successful cost-first
+    // placement and its runtime recipients intact.
     const sortedGroups = groups
       .flatMap((group) => expandCompactGroup(group, options.runnerBackend))
       .toSorted(
         (a, b) =>
+          (prioritizeSerialGateway
+            ? Number(b.configs.some(isExclusiveCiTestConfig)) -
+              Number(a.configs.some(isExclusiveCiTestConfig))
+            : 0) ||
           estimateBinSeconds([b]) - estimateBinSeconds([a]) ||
           runnerRank(b) - runnerRank(a) ||
           a.shard_name.localeCompare(b.shard_name),
@@ -5340,6 +5349,20 @@ function createCompactNodeTestShardBundles(
         )
       : finalJobs;
   if (measuredJobs.length > compactJobCap) {
+    if (options.runnerBackend === "hybrid" && !prioritizeSerialGateway) {
+      // Rebuild from source so the alternate order passes every admission and
+      // runtime-placement check before any rows are published.
+      return createCompactNodeTestShardBundles(
+        sourceShards,
+        options,
+        compactMode,
+        selectedToolingFiles,
+        splitHostedToolingTails,
+        hostedToolingTailBudgets,
+        hostedToolingTailDonation,
+        true,
+      );
+    }
     throw new Error(
       `compact ${options.runnerBackend ?? "blacksmith"} node test plan exceeds ${compactJobCap} jobs (${measuredJobs.length} planned)`,
     );

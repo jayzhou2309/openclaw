@@ -12,7 +12,7 @@ import {
 } from "../gateway/operator-approval-standing-grants.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { describeInterpreterInlineEval } from "../infra/command-analysis/inline-eval.js";
-import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
+import { detectInlineEvalInSegments } from "../infra/command-analysis/risks.js";
 import { lookupCronRunExecSource } from "../infra/cron-run-exec-source.js";
 import { emitTrustedSecurityEvent } from "../infra/diagnostic-events.js";
 import {
@@ -49,6 +49,7 @@ import {
   type ExecAutoReviewDecision,
 } from "../infra/exec-auto-review.js";
 import { hasPosixShellStartupBeforeInlineCommand } from "../infra/exec-wrapper-resolution.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import {
   prepareSystemRunMutableFileBinding,
   revalidateSystemRunMutableFileBinding,
@@ -121,12 +122,7 @@ function recordAutoReviewDenial(sessionKey: string | undefined): number {
   );
   consecutiveAutoReviewDenials.delete(sessionKey);
   consecutiveAutoReviewDenials.set(sessionKey, count);
-  if (consecutiveAutoReviewDenials.size > MAX_AUTO_REVIEW_SESSIONS) {
-    const oldest = consecutiveAutoReviewDenials.keys().next().value;
-    if (oldest !== undefined) {
-      consecutiveAutoReviewDenials.delete(oldest);
-    }
-  }
+  pruneMapToMaxSize(consecutiveAutoReviewDenials, MAX_AUTO_REVIEW_SESSIONS);
   return count;
 }
 
@@ -498,7 +494,7 @@ export async function processGatewayAllowlist(
     });
   }
   const inlineEvalHit =
-    params.strictInlineEval === true ? detectPolicyInlineEval(allowlistEval.segments) : null;
+    params.strictInlineEval === true ? detectInlineEvalInSegments(allowlistEval.segments) : null;
   const allowAlwaysPersistence = resolveAllowAlwaysPersistenceDecision({
     segments: allowlistEval.segments,
     cwd: params.workdir,
@@ -1126,13 +1122,7 @@ export async function processGatewayAllowlist(
       turnSourceAccountId: params.turnSourceAccountId,
       register: registerGatewayApproval,
       askFallback,
-      resolveTimedOut: (state) => {
-        const adjusted = applyTimedOutAllowlistFallback(state);
-        return {
-          approvedByAsk: adjusted.approvedByAsk,
-          deniedReason: adjusted.deniedReason,
-        };
-      },
+      resolveTimedOut: applyTimedOutAllowlistFallback,
       requiresExplicitApproval: requiresInlineEvalApproval,
       requiresAutoReviewHumanApproval:
         autoReviewRequiresHumanApproval ||
@@ -1225,13 +1215,7 @@ export async function processGatewayAllowlist(
         preResolvedDecision,
         signal: params.signal,
         askFallback,
-        resolveTimedOut: (state) => {
-          const adjusted = applyTimedOutAllowlistFallback(state);
-          return {
-            approvedByAsk: adjusted.approvedByAsk,
-            deniedReason: adjusted.deniedReason,
-          };
-        },
+        resolveTimedOut: applyTimedOutAllowlistFallback,
         requiresExplicitApproval: requiresInlineEvalApproval,
         requiresAutoReviewHumanApproval:
           autoReviewRequiresHumanApproval ||
@@ -1524,10 +1508,7 @@ export async function processGatewayAllowlist(
           return { status: "started" as const, run };
         }, "exec-host:approval");
       } catch (error) {
-        if (
-          error instanceof GatewayDrainingError ||
-          (error instanceof Error && error.message === "gateway is draining for restart")
-        ) {
+        if (error instanceof GatewayDrainingError) {
           await sendExecApprovalFollowupResult(
             followupTarget,
             `Exec denied (gateway id=${approvalId}, gateway-draining): ${params.command}`,
