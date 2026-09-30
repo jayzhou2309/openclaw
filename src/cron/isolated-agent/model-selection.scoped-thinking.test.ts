@@ -58,7 +58,6 @@ describe("resolveCronThinkingSelection scoped hydration", () => {
     "hydrates $provider/$model thinking=$thinking for $agentRuntime through the scoped owner",
     async ({ provider, model, agentRuntime, thinking, hasHostRow }) => {
       scopedThinkingCatalogMock.mockResolvedValue([{ provider, id: model, reasoning: true }]);
-      const { resolveCronThinkingSelection } = await import("./model-selection.js");
       const selection = await resolveCronThinkingSelection({
         cfg: {},
         owner: {
@@ -96,7 +95,6 @@ describe("resolveCronThinkingSelection scoped hydration", () => {
   ])("keeps the admitted catalog when hydration has no selected row: %j", async ({ refreshed }) => {
     scopedThinkingCatalogMock.mockResolvedValue(refreshed);
     const carried = { provider: "openai", id: "gpt-5.6-luna", name: "Selected", reasoning: false };
-    const { resolveCronThinkingSelection } = await import("./model-selection.js");
     const selection = await resolveCronThinkingSelection({
       cfg: {},
       owner: { ...owner, modelCatalog: { entries: [carried], routeVariants: [] } },
@@ -148,7 +146,6 @@ describe("resolveCronThinkingSelection scoped hydration", () => {
   });
 
   it("keeps the owner catalog and skips hydration when thinking is off", async () => {
-    const { resolveCronThinkingSelection } = await import("./model-selection.js");
     const selection = await resolveCronThinkingSelection({
       cfg: {},
       owner,
