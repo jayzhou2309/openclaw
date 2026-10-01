@@ -37,6 +37,23 @@ export function parseConfigPath(
   return { ok: true, path: parts };
 }
 
+const MODEL_OBJECT_KEYS = new Set(["primary", "fallbacks", "timeoutMs"]);
+
+/**
+ * Expands a string model shorthand (`model: "provider/id"`) into `{ primary }` when a path
+ * descends into one of its object keys, so setting `model.fallbacks` keeps the primary.
+ */
+export function expandModelShorthandParent(
+  existing: unknown,
+  childKey: string | undefined,
+): PathNode | undefined {
+  if (typeof existing !== "string" || !childKey || !MODEL_OBJECT_KEYS.has(childKey)) {
+    return undefined;
+  }
+  const primary = existing.trim();
+  return primary ? { primary } : {};
+}
+
 /** Sets a value at a validated config path, creating missing plain-object parents. */
 export function setConfigValueAtPath(root: PathNode, path: string[], value: unknown): void {
   const leafKey = path.at(-1);
@@ -44,9 +61,11 @@ export function setConfigValueAtPath(root: PathNode, path: string[], value: unkn
     throw new Error("Config path must contain at least one segment");
   }
   let cursor: PathNode = root;
-  for (const key of path.slice(0, -1)) {
+  for (const [index, key] of path.slice(0, -1).entries()) {
     const existing = Object.hasOwn(cursor, key) ? cursor[key] : undefined;
-    const next: PathNode = isPlainObject(existing) ? existing : {};
+    const next: PathNode = isPlainObject(existing)
+      ? existing
+      : (expandModelShorthandParent(existing, path[index + 1]) ?? {});
     if (next !== existing) {
       setOwnConfigProperty(cursor, key, next);
     }
