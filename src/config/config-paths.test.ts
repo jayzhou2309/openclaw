@@ -127,3 +127,35 @@ describe("config path own-property traversal", () => {
     });
   }
 });
+
+describe("setConfigValueAtPath string model shorthand", () => {
+  it.each([
+    {
+      path: ["agents", "defaults", "model", "fallbacks"],
+      value: ["anthropic/claude-sonnet-4-6"],
+      expected: { primary: "openai/gpt-5.4", fallbacks: ["anthropic/claude-sonnet-4-6"] },
+    },
+    {
+      path: ["agents", "defaults", "model", "primary"],
+      value: "anthropic/claude-sonnet-4-6",
+      expected: { primary: "anthropic/claude-sonnet-4-6" },
+    },
+  ])("keeps the string model as primary when setting $path.3", ({ path, value, expected }) => {
+    const root = { agents: { defaults: { model: "openai/gpt-5.4" } } };
+
+    setConfigValueAtPath(root, path, value);
+
+    expect(root.agents.defaults.model).toEqual(expected);
+  });
+
+  it("keeps a string tool model as primary when setting timeoutMs", () => {
+    const root = { agents: { defaults: { imageModel: "openai/gpt-image-2" } } };
+
+    setConfigValueAtPath(root, ["agents", "defaults", "imageModel", "timeoutMs"], 180_000);
+
+    expect(root.agents.defaults.imageModel).toEqual({
+      primary: "openai/gpt-image-2",
+      timeoutMs: 180_000,
+    });
+  });
+});

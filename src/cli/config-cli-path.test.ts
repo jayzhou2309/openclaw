@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
-import { mergeAtPath, parseConfigSetValue } from "./config-cli-path.js";
+import { mergeAtPath, parseConfigSetValue, setAtPath } from "./config-cli-path.js";
 
 function nestedRecord(depth: number, leaf: Record<string, unknown>): Record<string, unknown> {
   let value = leaf;
@@ -62,5 +62,24 @@ describe("parseConfigSetValue", () => {
       cursor = cursor.nested;
     }
     expect(cursor).toEqual({ retained: true, added: true });
+  });
+});
+
+describe("setAtPath string model shorthand", () => {
+  it("keeps the string model as primary when setting fallbacks", () => {
+    const root = {
+      agents: { entries: { ops: { model: "openai/gpt-5.4" } } },
+    };
+
+    setAtPath(
+      root,
+      ["agents", "entries", "ops", "model", "fallbacks"],
+      ["anthropic/claude-sonnet-4-6"],
+    );
+
+    expect(root.agents.entries.ops.model).toEqual({
+      primary: "openai/gpt-5.4",
+      fallbacks: ["anthropic/claude-sonnet-4-6"],
+    });
   });
 });
