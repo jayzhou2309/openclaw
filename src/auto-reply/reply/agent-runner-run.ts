@@ -446,10 +446,10 @@ export async function runReplyAgent(
     const queuedBehindActiveRun = isRunActive?.() === true;
     await touchActiveSessionEntry();
     if (queuedBehindActiveRun) {
-      if (typingSettlesWithQueuedItem) {
+      await typingSignals.signalToolStart();
+      if (typingSettlesWithQueuedItem && typing.isActive()) {
         opts?.onTypingHandoff?.();
       }
-      await typingSignals.signalToolStart();
     } else {
       typing.cleanup();
     }
