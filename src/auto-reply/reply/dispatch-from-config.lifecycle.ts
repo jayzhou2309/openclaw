@@ -36,7 +36,7 @@ import { loadSessionStoreEntry } from "./dispatch-from-config.runtime.js";
 import { createReplyTurnLedger } from "./dispatch-from-config.turn-ledger.js";
 import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
 import { DispatchSessionRefreshRequiredError } from "./dispatch-session-refresh-error.js";
-import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
+import { waitForReplyDispatcherIdle } from "./reply-dispatcher-idle.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import {
