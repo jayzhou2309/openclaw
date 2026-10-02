@@ -828,7 +828,12 @@ describe("retained session source verification", () => {
         resolvedPluginIds: ["codex"],
       });
       const rerun = await run();
-      expect(rerun.totals.issues).toBe(0);
+      expect(rerun.targets.flatMap((target) => target.issues)).toEqual([
+        {
+          code: "historical_transcript_deferred",
+          message: `${bootTranscript}: Error: Primary transcript header does not match its original filename`,
+        },
+      ]);
       expect(fs.readFileSync(bootMoves[0]!.archivePath)).toEqual(bootBytes);
     });
   });
