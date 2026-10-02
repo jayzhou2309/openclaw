@@ -1,8 +1,8 @@
+// Tests high-level reply flow decisions across commands and agent dispatch.
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../tokens.js";
-// Tests high-level reply flow decisions across commands and agent dispatch.
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher-idle.js";
 import {
   composeReplyDispatchBeforeDeliver,
