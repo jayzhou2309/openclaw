@@ -111,6 +111,7 @@ describe("worker placement read projection", () => {
             };
           },
         },
+        runnerAvailability: { read: () => undefined },
         warn,
         now: () => 2000,
       });

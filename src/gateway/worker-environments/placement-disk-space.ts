@@ -4,7 +4,10 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { StaleWorkerBuildError } from "./admission.js";
-import type { WorkerPlacementDiskSpaceReader } from "./placement-projector.js";
+import type {
+  WorkerPlacementDiskSpaceReader,
+  WorkerPlacementRunnerAvailabilityReader,
+} from "./placement-projector.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerSessionPlacementStore,
@@ -108,6 +111,7 @@ function parseDiskSpaceProbe(stdout: string, observedAtMs: number): SessionPlace
 export function createWorkerPlacementDiskSpaceMonitor(params: {
   placements: Pick<WorkerSessionPlacementStore, "get" | "readChangeSnapshot" | "readProjection">;
   environments: Pick<WorkerEnvironmentService, "startTunnel">;
+  runnerAvailability: Pick<WorkerPlacementRunnerAvailabilityReader, "read">;
   warn: (message: string) => void;
   now?: () => number;
 }) {
@@ -127,6 +131,9 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
     // A stale worker build cannot recover until its placement binding changes.
     const stale = staleBindings.get(placement.sessionId);
     if (stale && hasExactBinding(stale, placement)) {
+      return;
+    }
+    if (params.runnerAvailability.read(placement)?.status === "offline") {
       return;
     }
     const tunnel = await params.environments.startTunnel({
