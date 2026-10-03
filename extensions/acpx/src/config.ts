@@ -4,7 +4,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { formatPluginConfigIssue } from "openclaw/plugin-sdk/extension-shared";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { splitCommandParts } from "./command-line.js";
 import { AcpxPluginConfigSchema } from "./config-schema.js";
 import type {
@@ -128,10 +131,10 @@ function resolveHostPackageRoot(argv1: string | undefined): string | null {
   }
   for (;;) {
     try {
-      const manifest = JSON.parse(fs.readFileSync(path.join(cursor, "package.json"), "utf8")) as {
-        name?: unknown;
-      };
-      if (manifest.name === "openclaw") {
+      const manifest: unknown = JSON.parse(
+        fs.readFileSync(path.join(cursor, "package.json"), "utf8"),
+      );
+      if (isRecord(manifest) && manifest.name === "openclaw") {
         return cursor;
       }
     } catch {
