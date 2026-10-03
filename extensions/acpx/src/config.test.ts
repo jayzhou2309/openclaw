@@ -1,16 +1,17 @@
 // ACPX tests cover config plugin behavior.
 import fs from "node:fs";
 import { createRequire } from "node:module";
-import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { buildPluginConfigSchema } from "openclaw/plugin-sdk/plugin-entry";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AcpxPluginConfigSchema } from "./config-schema.js";
 import { resolveAcpxPluginConfig, resolveAcpxPluginRoot } from "./config.js";
 
 const requireFromTest = createRequire(import.meta.url);
 const TSX_IMPORT = requireFromTest.resolve("tsx");
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function expectedMcpServerArgs(params: { sourceEntry: string; distEntry: string }): string[] {
   const distEntry = path.resolve(params.distEntry);
@@ -188,7 +189,7 @@ describe("embedded acpx plugin config", () => {
   });
 
   it("launches managed bridges from the host package when acpx is an external package", () => {
-    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-acpx-external-")));
+    const tmp = fs.realpathSync(tempDirs.make("openclaw-acpx-external-"));
     const hostRoot = path.join(tmp, "lib", "node_modules", "openclaw");
     fs.mkdirSync(path.join(hostRoot, "dist", "mcp"), { recursive: true });
     fs.writeFileSync(path.join(hostRoot, "package.json"), JSON.stringify({ name: "openclaw" }));
@@ -225,7 +226,6 @@ describe("embedded acpx plugin config", () => {
       });
     } finally {
       process.argv = originalArgv;
-      fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
 
