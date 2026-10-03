@@ -121,6 +121,31 @@ describe("hook background admission", () => {
     expect(mocks.runCronIsolatedAgentTurn).toHaveBeenCalledTimes(2);
   });
 
+  it("announces a pre-execution fan-out failure once across producer redeliveries", async () => {
+    mocks.getRuntimeConfig.mockReturnValue(config);
+    mocks.runCronIsolatedAgentTurn.mockResolvedValue({
+      status: "skipped" as const,
+      error: "model provider unavailable",
+      admissionDisposition: "rejected" as const,
+    });
+    const handler = createHandler(100);
+    const redelivered = { messages: [{ id: "alert1", from: "a@example.com", subject: "Alert" }] };
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const response = await post(handler, "/hooks/gmail", redelivered);
+      expect(response.res.statusCode).toBe(502);
+    }
+    await post(handler, "/hooks/gmail", {
+      messages: [{ id: "alert2", from: "b@example.com", subject: "Other" }],
+    });
+
+    expect(mocks.runCronIsolatedAgentTurn).toHaveBeenCalledTimes(4);
+    expect(mocks.enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual([
+      "Hook Gmail (skipped): model provider unavailable",
+      "Hook Gmail (skipped): model provider unavailable",
+    ]);
+  });
+
   it("keeps the bounded admission cancel for direct agent hooks", async () => {
     mocks.getRuntimeConfig.mockReturnValue(config);
     let sawAbort = false;
