@@ -212,6 +212,47 @@ describe("owned SQLite snapshot transfer", () => {
     expect((await fs.readdir(tempDir)).toSorted()).toEqual(["snapshot.sqlite", "source.sqlite"]);
   });
 
+  function mockLinuxCtimeBirthtimeTransfer(afterTransfer?: (stagedPath: string) => Promise<void>) {
+    let stagedPath: string | undefined;
+    const withCtimeBirthtime = <T extends fsSync.Stats | fsSync.BigIntStats>(stat: T): T =>
+      Object.defineProperty(stat, "birthtimeMs", { value: stat.ctimeMs });
+    durabilityTestState.transfer = async (options, publish) => {
+      const receipt = await publish(options);
+      stagedPath = options.targetPath;
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      await afterTransfer?.(stagedPath);
+      return { ...receipt, identity: withCtimeBirthtime(receipt.identity) };
+    };
+    const lstat = fs.lstat.bind(fs);
+    vi.spyOn(fs, "lstat").mockImplementation((async (...args: Parameters<typeof fs.lstat>) => {
+      const stat = await lstat(...args);
+      return String(args[0]) === stagedPath ? withCtimeBirthtime(stat) : stat;
+    }) as typeof fs.lstat);
+  }
+
+  it.runIf(process.platform !== "win32")(
+    "accepts a hard-link transfer when Linux reports ctime as birthtime",
+    async () => {
+      mockLinuxCtimeBirthtimeTransfer();
+      await expectSnapshotSuccess({ sourcePath, targetPath, preserveRowIds: true });
+      expect((await fs.readdir(tempDir)).toSorted()).toEqual(["snapshot.sqlite", "source.sqlite"]);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects a staged image rewritten during a Linux hard-link transfer",
+    async () => {
+      mockLinuxCtimeBirthtimeTransfer(async (stagedPath) => {
+        const later = new Date(Date.now() + 60_000);
+        await fs.utimes(stagedPath, later, later);
+      });
+      await expectSnapshotFailureWithoutTarget(
+        { sourcePath, targetPath, preserveRowIds: true },
+        /staging file changed during transfer/,
+      );
+    },
+  );
+
   it.each(["allocation", "durability"] as const)(
     "cleans a failed private image transfer (%s) without changing its source",
     async (failure) => {
