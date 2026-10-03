@@ -144,6 +144,19 @@ describe("hook background admission", () => {
       "Hook Gmail (skipped): model provider unavailable",
       "Hook Gmail (skipped): model provider unavailable",
     ]);
+
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 5 * 60_000 + 1);
+    try {
+      expect((await post(handler, "/hooks/gmail", redelivered)).res.statusCode).toBe(502);
+      expect(mocks.runCronIsolatedAgentTurn).toHaveBeenCalledTimes(5);
+      expect(mocks.enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual([
+        "Hook Gmail (skipped): model provider unavailable",
+        "Hook Gmail (skipped): model provider unavailable",
+        "Hook Gmail (skipped): model provider unavailable",
+      ]);
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it("announces an execution failure after an earlier redelivery failed admission", async () => {
