@@ -146,6 +146,32 @@ describe("hook background admission", () => {
     ]);
   });
 
+  it("announces an execution failure after an earlier redelivery failed admission", async () => {
+    mocks.getRuntimeConfig.mockReturnValue(config);
+    mocks.runCronIsolatedAgentTurn
+      .mockResolvedValueOnce({
+        status: "skipped" as const,
+        error: "model provider unavailable",
+        admissionDisposition: "rejected" as const,
+      })
+      .mockImplementationOnce(async (params: { onExecutionStarted?: () => void }) => {
+        params.onExecutionStarted?.();
+        return { status: "error" as const, error: "execution failed" };
+      });
+    const handler = createHandler(100);
+    const redelivered = { messages: [{ id: "alert3", from: "c@example.com", subject: "Alert" }] };
+
+    expect((await post(handler, "/hooks/gmail", redelivered)).res.statusCode).toBe(502);
+    expect((await post(handler, "/hooks/gmail", redelivered)).res.statusCode).toBe(200);
+
+    await vi.waitFor(() =>
+      expect(mocks.enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual([
+        "Hook Gmail (skipped): model provider unavailable",
+        "Hook Gmail (error): execution failed",
+      ]),
+    );
+  });
+
   it("keeps the bounded admission cancel for direct agent hooks", async () => {
     mocks.getRuntimeConfig.mockReturnValue(config);
     let sawAbort = false;
