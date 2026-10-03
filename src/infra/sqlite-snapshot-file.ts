@@ -147,11 +147,12 @@ export function sameFileStatFingerprint(
 ): boolean {
   // Creating the publication hard link changes source ctime, so compare the
   // mutation fields that remain stable for the same bytes and pathname owner.
+  // Node can substitute ctime for an unavailable Linux birthtime.
   return (
     sameFileIdentity(left, right) &&
     left.size === right.size &&
     left.mtimeMs === right.mtimeMs &&
-    left.birthtimeMs === right.birthtimeMs
+    (process.platform === "linux" || left.birthtimeMs === right.birthtimeMs)
   );
 }
 
