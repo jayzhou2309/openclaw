@@ -567,8 +567,15 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
   const identityRecoveryScheduler = scheduler.scope();
   let identityRecoveryAttempts = 0;
   let identityRecoveryRetry: { cancel: () => void } | undefined;
+  // Cancel only stops future dispatch, so an auth.test already in flight must recheck
+  // this after it settles before publishing or rearming.
+  let transportConnected = false;
   function scheduleSlackIdentityRecovery(err: unknown) {
-    if (isNonRecoverableSlackAuthError(err) || identityRecoveryScheduler.signal.aborted) {
+    if (
+      !transportConnected ||
+      isNonRecoverableSlackAuthError(err) ||
+      identityRecoveryScheduler.signal.aborted
+    ) {
       return;
     }
     identityRecoveryAttempts += 1;
@@ -576,7 +583,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
       id: "identity-recovery",
       delayMs: computeBackoff(SLACK_SOCKET_RECONNECT_POLICY, identityRecoveryAttempts),
       run: async () => {
-        if (await recoverSlackIdentity()) {
+        if ((await recoverSlackIdentity()) && transportConnected) {
           publishSlackConnectedStatus(opts.setStatus, ctx.identityHealth);
         }
       },
@@ -666,6 +673,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
         log: runtime.log,
         accountId: account.accountId,
       });
+      transportConnected = true;
       publishSlackConnectedStatus(opts.setStatus, ctx.identityHealth);
     }
 
@@ -686,6 +694,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
               reconnectAttempts = 0;
               disconnectedAt = undefined;
               authState.consecutiveInvalidAuth = 0;
+              transportConnected = true;
               await recoverSlackIdentity();
               publishSlackConnectedStatus(opts.setStatus, ctx.identityHealth);
               if (!hasLoggedSocketConnected) {
@@ -704,6 +713,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
           if (opts.abortSignal?.aborted) {
             break;
           }
+          transportConnected = false;
           cancelSlackIdentityRecovery();
           publishSlackDisconnectedStatus(
             opts.setStatus,
@@ -791,6 +801,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
   } finally {
     installationState.release();
     runtimeStarted = false;
+    transportConnected = false;
     await identityRecoveryScheduler.stop();
     presenceRequestAbort?.abort();
     await presenceMonitor?.stop();
