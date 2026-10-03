@@ -587,6 +587,7 @@ export function startGatewayConfigReloader(
       deferredRestartRuntimeBaseline !== undefined &&
       !pluginLifecycle &&
       followUp.mode === "auto" &&
+      opts.canRetireDeferredRestart?.() !== false &&
       diffConfigPaths(
         withPluginInstallRecords({}, deferredRestartRuntimeBaseline.installRecords),
         nextPluginInstallConfig,
