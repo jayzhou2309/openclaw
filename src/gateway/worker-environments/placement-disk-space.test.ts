@@ -56,6 +56,7 @@ function createHarness(
   runWorkspaceCommand: (command: WorkerWorkspaceCommand) => Promise<SpawnResult>,
 ) {
   let placement: WorkerSessionPlacementRecord = activePlacement();
+  let runnerStatus: "available" | "offline" = "available";
   const unexpected = async () => {
     throw new Error("unexpected workspace mutation during a disk probe");
   };
@@ -87,6 +88,9 @@ function createHarness(
       }),
     },
     environments: { startTunnel },
+    runnerAvailability: {
+      read: () => ({ kind: "device" as const, deviceId: "node-1", status: runnerStatus }),
+    },
     warn,
     now: () => 1_000,
   });
@@ -96,6 +100,9 @@ function createHarness(
     warn,
     get placement() {
       return placement;
+    },
+    setRunnerStatus(next: "available" | "offline") {
+      runnerStatus = next;
     },
     setPlacement(next: WorkerSessionPlacementRecord) {
       placement = next;
@@ -228,6 +235,24 @@ describe("active worker placement disk-space monitoring", () => {
 
     expect(harness.warn).toHaveBeenCalledTimes(2);
     expect(harness.startTunnel).toHaveBeenCalledTimes(2);
+  });
+
+  it("skips probes while the device runner is offline and resumes when it reconnects", async () => {
+    const harness = createHarness(async () => result(6 * GIB, 10 * GIB));
+    harness.startTunnel.mockRejectedValue(new Error("device worker node is not connected"));
+    harness.setRunnerStatus("offline");
+
+    await harness.monitor.sweep();
+    await harness.monitor.sweep();
+
+    expect(harness.startTunnel).toHaveBeenCalledTimes(0);
+    expect(harness.warn).toHaveBeenCalledTimes(0);
+
+    harness.setRunnerStatus("available");
+    await harness.monitor.sweep();
+
+    expect(harness.startTunnel).toHaveBeenCalledTimes(1);
+    expect(harness.warn).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the last exact-binding sample and warns on every failed advisory probe", async () => {
