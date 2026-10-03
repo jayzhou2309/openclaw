@@ -147,4 +147,51 @@ describe("slack socket reconnect loop", () => {
     controller.abort();
     await expect(run).resolves.toBeUndefined();
   });
+
+  it("retries a transient identity failure while the socket stays connected", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    getSlackClient()
+      .auth.test.mockRejectedValueOnce(new Error("request_timeout"))
+      .mockRejectedValueOnce(new Error("request_timeout"))
+      .mockResolvedValueOnce({
+        user_id: "UBOT",
+        bot_id: "BBOT",
+        team_id: "T1",
+        is_enterprise_install: false,
+      });
+    let resolveStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+    slackTestState.appStartMock.mockImplementation(async () => {
+      resolveStarted?.();
+    });
+
+    const run = start();
+
+    await started;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(setStatus).toHaveBeenLastCalledWith({
+      connected: true,
+      lastConnectedAt: expect.any(Number),
+      terminalDisconnect: true,
+      lifecycle: "blocked",
+      lastError: "request_timeout",
+    });
+
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(getSlackClient().auth.test).toHaveBeenCalledTimes(3);
+    expect(setStatus).toHaveBeenLastCalledWith({
+      running: true,
+      connected: true,
+      lastConnectedAt: expect.any(Number),
+      terminalDisconnect: undefined,
+      lifecycle: "ready",
+      lastError: null,
+    });
+    expect(slackTestState.appStartMock).toHaveBeenCalledTimes(1);
+    controller.abort();
+    await expect(run).resolves.toBeUndefined();
+  });
 });
