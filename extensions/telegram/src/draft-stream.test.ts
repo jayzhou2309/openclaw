@@ -534,6 +534,63 @@ describe("createTelegramDraftStream", () => {
     }
   });
 
+  it("keeps a rotated preview until Telegram accepts its replacement", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveReplacement!: (message: MockSentMessage) => void;
+      const replacement = new Promise<MockSentMessage>((resolve) => {
+        resolveReplacement = resolve;
+      });
+      const api = createMockDraftApi();
+      api.sendMessage.mockResolvedValueOnce({ message_id: 17 }).mockReturnValueOnce(replacement);
+      const stream = createDraftStream(api);
+
+      stream.update("Answer preview");
+      await stream.flush();
+      stream.rotateToNewMessageDeferringDelete();
+      stream.update("Replacement");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(api.sendMessage).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(api.deleteMessage).not.toHaveBeenCalled();
+
+      resolveReplacement({ message_id: 42 });
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a rotated preview visible when its replacement send fails", async () => {
+    vi.useFakeTimers();
+    try {
+      const api = createMockDraftApi();
+      api.sendMessage
+        .mockResolvedValueOnce({ message_id: 17 })
+        .mockRejectedValueOnce(new Error("replacement rejected"));
+      const stream = createDraftStream(api, { warn: vi.fn() });
+
+      stream.update("Answer preview");
+      await stream.flush();
+      stream.rotateToNewMessageDeferringDelete();
+      stream.update("Replacement");
+      await stream.flush();
+      await stream.stop();
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(api.sendMessage).toHaveBeenCalledTimes(2);
+      expect(api.deleteMessage).not.toHaveBeenCalled();
+
+      await stream.clear();
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("sends first update immediately after forceNewMessage within throttle window", async () => {
     vi.useFakeTimers();
     try {
