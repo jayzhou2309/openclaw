@@ -5,7 +5,11 @@ import { emitAgentEvent } from "../infra/agent-events.js";
 import { readAutomationDisplayState } from "../infra/agent-run-registry.automation.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { projectProgressCardChannelUpdate } from "../session-cards/progress-card-channel-summary.js";
-import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
+import {
+  markCollectedSessionSpawns,
+  normalizeAcceptedSessionSpawnResult,
+  readCollectedRunIds,
+} from "./accepted-session-spawn.js";
 import {
   consumeAdjustedParamsForToolCall,
   consumePreExecutionBlockedToolCall,
@@ -192,6 +196,12 @@ export async function prepareToolExecutionEnd(
       : null;
   if (acceptedSessionSpawn) {
     ctx.state.acceptedSessionSpawns.push(acceptedSessionSpawn);
+  }
+  if (toolName === "agents_wait" && !isToolError) {
+    markCollectedSessionSpawns(
+      ctx.state.acceptedSessionSpawns,
+      readCollectedRunIds(sanitizedResult),
+    );
   }
   ctx.state.toolMetaById.delete(toolCallId);
   ctx.state.toolSummaryById.delete(toolCallId);
