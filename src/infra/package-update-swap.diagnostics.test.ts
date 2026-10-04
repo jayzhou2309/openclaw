@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -122,6 +123,35 @@ describe.skipIf(process.platform === "win32")("managed publication drift facts",
     } finally {
       vi.restoreAllMocks();
     }
+  });
+
+  it("names the rejected publication object and its owner when an install directory has a foreign uid", async () => {
+    const f = await createPackageSwapFixture(root);
+    await fixture.writePostCoreCapability(f.params.stage.packageRoot);
+    const binDir = path.dirname(f.launcher);
+    const foreignUid = BigInt(process.getuid!() + 1);
+    const lstatSync = fsSync.lstatSync.bind(fsSync);
+    vi.spyOn(fsSync, "lstatSync").mockImplementation(((file: fsSync.PathLike, options) => {
+      const stat = lstatSync(file, options);
+      if (stat && path.resolve(String(file)) === binDir) {
+        return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, {
+          uid: typeof stat.uid === "bigint" ? foreignUid : Number(foreignUid),
+        });
+      }
+      return stat;
+    }) as typeof fsSync.lstatSync);
+    await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+      const fence = await executor.enter(f.packageRoot);
+      const result = await swapStagedPackageInstall({
+        ...f.params,
+        activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
+      });
+      expect(result.status).not.toBe("committed");
+      expect(result.step.stderrTail).toContain(
+        `Package publication object has an unsafe identity (object=bin, kind=directory, uid=${foreignUid}; required directory owned by uid ${process.getuid!()})`,
+      );
+      expect(await fs.readFile(f.launcher, "utf8")).toBe("old launcher\n");
+    });
   });
 
   it("bounds ordered drift diagnostics and preserves the journaled fingerprint format", async ({
