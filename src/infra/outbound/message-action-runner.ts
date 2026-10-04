@@ -480,11 +480,14 @@ async function handleInternalSourceReplySendAction(
     ...(sourceReplyMediaUrls.length ? { mediaUrls: sourceReplyMediaUrls } : {}),
     dryRun,
   };
-  // This call only writes the transcript and runs no channel transport, so the receipt
-  // must not tell the model that a channel user received the reply.
-  const receipt = payload.sourceReplySink
-    ? `Recorded reply in the current session transcript via ${payload.sourceReplySink}. This send did not deliver it to an external channel.`
-    : "Prepared reply for the current session transcript.";
+  const sink = payload.sourceReplySink ? ` via ${payload.sourceReplySink}` : "";
+  // A WebChat run normalized to the sink shows this transcript to its user. A run that was
+  // message-tool-only from the start may have no viewer here, so claim no visible delivery.
+  const receipt = input.sourceReplyTranscriptOnly
+    ? payload.dryRun
+      ? "Prepared reply for the current session transcript."
+      : `Recorded reply in the current session transcript${sink}. This send did not deliver it to an external channel.`
+    : `${payload.dryRun ? "Prepared" : "Sent"} visible reply to the current source conversation${sink}.`;
   const cards = readClawHubRecommendations(payload.sourceReply.channelData);
   // The model sees content, not private details. Report verified state even when it supplied prose.
   const recommendationSummary = cards.length

@@ -85,6 +85,12 @@ describe("WebChat message tool internal source reply", () => {
       sourceReplySink: "internal-ui",
       sourceReply: { text: "Visible progress from the message tool." },
     });
+    expect(toolResult.content).toEqual([
+      {
+        type: "text",
+        text: "Sent visible reply to the current source conversation via internal-ui.",
+      },
+    ]);
 
     const sourceReply = extractMessagingToolSourceReplyPayload(toolResult);
     expect(sourceReply).toMatchObject({ text: "Visible progress from the message tool." });

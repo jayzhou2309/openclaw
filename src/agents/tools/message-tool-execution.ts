@@ -585,6 +585,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
                 sandboxRoot: options?.sandboxRoot,
                 sandboxContainerWorkdir: options?.sandboxContainerWorkdir,
                 sourceReplyDeliveryMode: sourceReplySinkDeliveryMode,
+                sourceReplyTranscriptOnly: options?.sourceReplyDeliveryMode === "message_tool_only",
                 // Only an admitted channel source can arm terminal restart reconciliation.
                 // Source-less scheduled and ambient sends remain ordinary message actions.
                 sourceReplyFinal: hasExactSourceTurn
