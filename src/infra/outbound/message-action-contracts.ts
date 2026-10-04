@@ -126,7 +126,7 @@ export type MessageActionInput = {
   sandboxContainerWorkdir?: string;
   dryRun?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-  /** The run itself was message-tool-only, so an internal sink write reaches only its transcript. */
+  /** The run answers another session, so an internal sink write reaches only its transcript. */
   sourceReplyTranscriptOnly?: boolean;
   sourceReplyFinal?: boolean;
   sourceReplyToolCallId?: string;
