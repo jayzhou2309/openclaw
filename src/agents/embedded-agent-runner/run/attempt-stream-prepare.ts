@@ -333,6 +333,7 @@ function prepareStream(
     ...attempt,
     session: activeSession,
     onModelUsage: input.onModelUsage,
+    operationalRunInstance: attempt.admittedRunContext.operationalRunInstance,
     messageChannel: input.runtimeChannel,
     hookRunner: getGlobalHookRunner() ?? undefined,
     reasoningMode: attempt.reasoningLevel ?? "off",
