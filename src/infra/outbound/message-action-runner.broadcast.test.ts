@@ -507,7 +507,7 @@ describe("broadcast send outcomes through native actions", () => {
     expect(result.toolResult?.content).toEqual([
       {
         type: "text",
-        text: "Sent visible reply to the current source conversation via internal-ui.",
+        text: "Recorded reply in the current session transcript via internal-ui. This send did not deliver it to an external channel.",
       },
     ]);
     expect(JSON.stringify(result.toolResult?.content)).not.toContain(text);

@@ -480,8 +480,11 @@ async function handleInternalSourceReplySendAction(
     ...(sourceReplyMediaUrls.length ? { mediaUrls: sourceReplyMediaUrls } : {}),
     dryRun,
   };
-  const action = payload.dryRun ? "Prepared" : "Sent";
-  const sink = payload.sourceReplySink ? ` via ${payload.sourceReplySink}` : "";
+  // This call only writes the transcript and runs no channel transport, so the receipt
+  // must not tell the model that a channel user received the reply.
+  const receipt = payload.sourceReplySink
+    ? `Recorded reply in the current session transcript via ${payload.sourceReplySink}. This send did not deliver it to an external channel.`
+    : "Prepared reply for the current session transcript.";
   const cards = readClawHubRecommendations(payload.sourceReply.channelData);
   // The model sees content, not private details. Report verified state even when it supplied prose.
   const recommendationSummary = cards.length
@@ -493,7 +496,7 @@ async function handleInternalSourceReplySendAction(
       : undefined;
   const { sourceReplyDeliveryMode, ...details } = payload;
   const toolResult = textResult(
-    `${action} visible reply to the current source conversation${sink}.${recommendationSummary ? `\n${recommendationSummary}` : ""}`,
+    `${receipt}${recommendationSummary ? `\n${recommendationSummary}` : ""}`,
     {
       ...details,
       ...(sourceReplyDeliveryMode ? { sourceReplyDeliveryMode } : {}),
