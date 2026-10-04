@@ -827,6 +827,8 @@ export function createTelegramDraftStream(params: {
         streamProviderMessage = undefined;
       },
     });
+    // Joining a rotated first send can add a late-accepted superseded preview.
+    retireSupersededPreviews();
     if (typeof messageId === "number" && Number.isFinite(messageId)) {
       scheduleDetachedDelete(messageId, visibleSince);
     }

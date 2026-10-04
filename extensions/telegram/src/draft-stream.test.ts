@@ -465,6 +465,34 @@ describe("createTelegramDraftStream", () => {
     }
   });
 
+  it("clears a rotated preview accepted while clear waits for its in-flight send", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveSend!: (message: MockSentMessage) => void;
+      const send = new Promise<MockSentMessage>((resolve) => {
+        resolveSend = resolve;
+      });
+      const api = createMockDraftApi();
+      api.sendMessage.mockReturnValueOnce(send);
+      const stream = createDraftStream(api);
+
+      stream.update("Temporary preview");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(api.sendMessage).toHaveBeenCalledTimes(1);
+      stream.rotateToNewMessageDeferringDelete();
+      const clearPromise = stream.clear();
+      resolveSend({ message_id: 17 });
+      await clearPromise;
+
+      await vi.advanceTimersByTimeAsync(3_999);
+      expect(api.deleteMessage).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(api.deleteMessage).toHaveBeenCalledExactlyOnceWith(123, 17);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each(["first", "batched"] as const)(
     "keeps an in-flight %s reply target owned when reposition cleanup fails",
     async (replyToMode) => {
