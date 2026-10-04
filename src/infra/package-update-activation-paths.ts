@@ -54,6 +54,7 @@ export function resolvePackageActivationHelper(anchor: string): string {
 
 export function packageActivationIdentity(file: string, directory: boolean | "launcher"): string {
   const stat = fs.lstatSync(file, { bigint: true });
+  const uid = process.getuid?.();
   if (
     stat.ino === 0n ||
     !(directory === "launcher"
@@ -61,9 +62,22 @@ export function packageActivationIdentity(file: string, directory: boolean | "la
       : directory
         ? stat.isDirectory() && !stat.isSymbolicLink()
         : stat.isFile()) ||
-    (process.getuid && stat.uid !== BigInt(process.getuid()))
+    (uid !== undefined && stat.uid !== BigInt(uid))
   ) {
-    throw new Error("Package publication object has an unsafe identity");
+    const kind = stat.isSymbolicLink()
+      ? "symlink"
+      : stat.isDirectory()
+        ? "directory"
+        : stat.isFile()
+          ? "file"
+          : "other";
+    const required =
+      directory === "launcher" ? "file or symlink" : directory ? "directory" : "file";
+    throw new Error(
+      `Package publication object has an unsafe identity (object=${path.basename(file)}, kind=${kind}, uid=${stat.uid}${
+        stat.ino === 0n ? ", inode=0" : ""
+      }; required ${required}${uid === undefined ? "" : ` owned by uid ${uid}`})`,
+    );
   }
   return `${stat.dev}:${stat.ino}`;
 }
