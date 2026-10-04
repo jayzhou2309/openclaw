@@ -159,6 +159,47 @@ export function registerManagedTerminalResultTests(
       });
     },
   );
+
+  itUnix.each(
+    (["systemd", "launchd"] as const).flatMap((kind) =>
+      ([undefined, "published"] as const).map((updaterNotification) => ({
+        kind,
+        updaterNotification,
+      })),
+    ),
+  )(
+    "$kind keeps the direct child's refusal reason in the run ledger (notification=$updaterNotification)",
+    async ({ kind, updaterNotification }) => {
+      const { run, state } = await runManagedServiceManagerBoundary(kind, {
+        ledger: true,
+        updaterExitCode: 1,
+        helperExitCode: 1,
+        updaterNotification,
+        updaterResult: {
+          status: "error",
+          reason: "update-recovery-pending",
+          mode: "npm",
+          steps: [],
+          durationMs: 100,
+          recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+        } satisfies UpdateRunResult,
+      });
+      expect(state.restored).toBeUndefined();
+      expect(run).toMatchObject({
+        phase: "finished",
+        status: "failed",
+        reason: "update-recovery-pending",
+      });
+      expect(run?.steps).toContainEqual(
+        expect.objectContaining({
+          status: "failed",
+          failureFacts: expect.arrayContaining([
+            expect.objectContaining({ code: "update-recovery-pending" }),
+          ]),
+        }),
+      );
+    },
+  );
 }
 
 export function registerManagedRecoveryOutcomeTests(
