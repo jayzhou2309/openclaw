@@ -125,6 +125,13 @@ describe("GPT-Live gateway relay bridge", () => {
       resolvePeer: () => pending.resolve(peer),
       triggerPeerError: (error: Error) => startPeer.mock.calls[0]?.[0].onError(error),
       triggerPeerMediaError: (error: Error) => startPeer.mock.calls[0]?.[0].onMediaError?.(error),
+      startSession: () => {
+        const socket = observed.createSocket.mock.results[0]?.value;
+        if (!socket) {
+          throw new Error("expected sideband socket");
+        }
+        emitSideband(socket, { type: "session.started", session: { id: "rtc_bridge" } });
+      },
       testBridge: bridge as unknown as TestableGatewayBridge,
       waitForPeerStart: async () => {
         await vi.waitFor(() => expect(startPeer).toHaveBeenCalledOnce());
@@ -150,7 +157,8 @@ describe("GPT-Live gateway relay bridge", () => {
   });
 
   it("preserves caller-owned microphone frames while the media peer is starting", async () => {
-    const { bridge, connection, peer, resolvePeer, testBridge } = createPendingPeerBridge();
+    const { bridge, connection, peer, resolvePeer, startSession, testBridge } =
+      createPendingPeerBridge();
     expect(bridge.connect()).toBe(connection);
     const source = Buffer.from([0x7f, 0x41]);
     bridge.sendAudio(source);
@@ -160,6 +168,7 @@ describe("GPT-Live gateway relay bridge", () => {
 
     resolvePeer();
     await connection;
+    startSession();
 
     expect(peer.adoptPendingAudio).toHaveBeenCalledExactlyOnceWith(pendingAudio);
     expect(testBridge.pendingAudio).not.toBe(pendingAudio);
