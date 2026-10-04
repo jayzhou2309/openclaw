@@ -128,6 +128,29 @@ describe("WebChat message tool internal source reply", () => {
     );
   });
 
+  it("reports a route-less inter-session send as a transcript record, not a channel delivery", async () => {
+    const tool = createCurrentSourceMessageTool({
+      agentSessionKey: "agent:main:main",
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    const toolResult = await tool.execute("message-call", {
+      action: "send",
+      message: "Child task finished.",
+    });
+
+    expect(toolResult.details).toMatchObject({
+      target: "current-run",
+      sourceReplySink: "internal-ui",
+    });
+    expect(toolResult.content).toEqual([
+      {
+        type: "text",
+        text: "Recorded reply in the current session transcript via internal-ui. This send did not deliver it to an external channel.",
+      },
+    ]);
+  });
+
   it("stages a trusted HTML buffer before acknowledging the current-source send", async () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "message-tool-source-buffer-" },
