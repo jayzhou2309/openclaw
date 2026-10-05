@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import fsSync from "node:fs";
+import fsSync, { type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { syncDirectory } from "@openclaw/fs-safe/durability";
@@ -107,14 +107,46 @@ function mockExclusiveCopyTransfer() {
   return transfer;
 }
 
+function mockUnavailableBirthtime(
+  mode: "zero" | "ctime",
+  afterTransfer?: (stagedPath: string) => Promise<void>,
+) {
+  durabilityTestState.transfer = async (options, publish) => {
+    const receipt = await publish(options);
+    expect(receipt.method).toBe("hardlink");
+    await afterTransfer?.(options.targetPath);
+    return receipt;
+  };
+  const substituteBirthtime = (stat: Stats) => {
+    // Model ctime advancing when the source link is retired, even on coarse clocks.
+    stat.birthtimeMs = mode === "zero" ? 0 : stat.ctimeMs + (stat.nlink === 1 ? 1_000 : 0);
+    return stat;
+  };
+  const fstat = fsSync.fstatSync.bind(fsSync);
+  vi.spyOn(fsSync, "fstatSync").mockImplementation((...args) =>
+    args[1]?.bigint ? fstat(args[0], { bigint: true }) : substituteBirthtime(fstat(args[0])),
+  );
+  const lstat = fs.lstat.bind(fs);
+  vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+    return args[1]?.bigint
+      ? await lstat(args[0], { bigint: true })
+      : substituteBirthtime(await lstat(args[0]));
+  });
+}
+
 describe("owned SQLite snapshot transfer", () => {
   it.each([
-    { isolated: false, copyFallback: false },
-    { isolated: true, copyFallback: false },
-    { isolated: false, copyFallback: true },
-  ])(
-    "publishes one owned private image (isolated=$isolated, copy fallback=$copyFallback)",
-    async ({ isolated, copyFallback }) => {
+    { isolated: false, copyFallback: false, birthtime: "native" },
+    { isolated: true, copyFallback: false, birthtime: "native" },
+    { isolated: false, copyFallback: true, birthtime: "native" },
+    { isolated: false, copyFallback: false, birthtime: "zero" },
+    { isolated: false, copyFallback: false, birthtime: "ctime" },
+  ] as const)(
+    "publishes one owned private image (isolated=$isolated, copy fallback=$copyFallback, birthtime=$birthtime)",
+    async ({ isolated, copyFallback, birthtime }) => {
+      if (birthtime !== "native") {
+        mockUnavailableBirthtime(birthtime);
+      }
       const copy = copyFallback ? mockExclusiveCopyTransfer() : undefined;
       const source = new sqlite.DatabaseSync(sourcePath);
       try {
@@ -208,51 +240,19 @@ describe("owned SQLite snapshot transfer", () => {
     });
   });
 
-  function mockLinuxCtimeBirthtimeTransfer(afterTransfer?: (stagedPath: string) => Promise<void>) {
-    let stagedPath: string | undefined;
-    const withCtimeBirthtime = <T extends fsSync.Stats | fsSync.BigIntStats>(stat: T): T =>
-      Object.defineProperty(stat, "birthtimeMs", { value: stat.ctimeMs });
-    durabilityTestState.transfer = async (options, publish) => {
-      const receipt = await publish(options);
-      stagedPath = options.targetPath;
-      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-      await afterTransfer?.(stagedPath);
-      return { ...receipt, identity: withCtimeBirthtime(receipt.identity) };
-    };
-    const lstat = fs.lstat.bind(fs);
-    vi.spyOn(fs, "lstat").mockImplementation((async (...args: Parameters<typeof fs.lstat>) => {
-      const stat = await lstat(...args);
-      return String(args[0]) === stagedPath ? withCtimeBirthtime(stat) : stat;
-    }) as typeof fs.lstat);
-  }
-
-  it.runIf(process.platform !== "win32")(
-    "accepts a hard-link transfer when Linux reports ctime as birthtime",
-    async () => {
-      mockLinuxCtimeBirthtimeTransfer();
-      const receipt = await createVerifiedSqliteSnapshot({
-        sourcePath,
-        targetPath,
-        preserveRowIds: true,
-      });
-      expect(receipt.path).toBe(targetPath);
-      expect((await fs.readdir(tempDir)).toSorted()).toEqual(["snapshot.sqlite", "source.sqlite"]);
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "rejects a staged image rewritten during a Linux hard-link transfer",
-    async () => {
-      mockLinuxCtimeBirthtimeTransfer(async (stagedPath) => {
-        const later = new Date(Date.now() + 60_000);
-        await fs.utimes(stagedPath, later, later);
-      });
-      await expectSnapshotFailureWithoutTarget(
-        { sourcePath, targetPath, preserveRowIds: true },
-        /staging file changed during transfer/,
-      );
-    },
-  );
+  it("rejects same-size byte changes during a ctime-fallback transfer", async () => {
+    const original = await fs.readFile(sourcePath);
+    mockUnavailableBirthtime("ctime", async (stagedPath) => {
+      const bytes = await fs.readFile(stagedPath);
+      bytes.write("changed", 0, "utf8");
+      await fs.writeFile(stagedPath, bytes);
+    });
+    await expectSnapshotFailureWithoutTarget(
+      { sourcePath, targetPath, preserveRowIds: true },
+      /hash mismatch/,
+    );
+    expect(await fs.readFile(sourcePath)).toEqual(original);
+  });
 
   it.each(["allocation", "durability", "dev", "ino"] as const)(
     "refuses a failed private transfer (%s) without changing its source",
