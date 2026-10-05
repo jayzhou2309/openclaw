@@ -605,6 +605,34 @@ test("sessions.delete preserves an entry-bound worktree owned by another princip
   }
 });
 
+async function createIncognitoSessionWithWorktree(workspace: string) {
+  const created = await directSessionReq<{ key: string }>("sessions.create", {
+    agentId: "main",
+    incognito: true,
+  });
+  expect(created.ok, JSON.stringify(created)).toBe(true);
+  const key = created.payload!.key;
+  const worktree = await managedWorktrees.create({
+    repoRoot: workspace,
+    ownerKind: "session",
+    ownerId: key,
+  });
+  await patchSessionEntryCore(
+    {
+      agentId: "main",
+      sessionKey: key,
+      storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+    },
+    (entry) => ({
+      ...entry!,
+      spawnedCwd: worktree.path,
+      worktree: { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot },
+    }),
+  );
+  expect(loadSessionEntry({ agentId: "main", sessionKey: key })?.worktree?.id).toBe(worktree.id);
+  return { key, worktree };
+}
+
 test("sessions.reset removes an Incognito session worktree like sessions.delete", async () => {
   const openClawState = await createOpenClawTestState({
     layout: "state-only",
@@ -616,39 +644,65 @@ test("sessions.reset removes an Incognito session worktree like sessions.delete"
   await createSessionStoreDir();
   let worktreeId: string | undefined;
   try {
-    const created = await directSessionReq<{ key: string }>("sessions.create", {
-      agentId: "main",
-      incognito: true,
-    });
-    expect(created.ok, JSON.stringify(created)).toBe(true);
-    const key = created.payload!.key;
-    const worktree = await managedWorktrees.create({
-      repoRoot: workspace,
-      ownerKind: "session",
-      ownerId: key,
-    });
+    const { key, worktree } = await createIncognitoSessionWithWorktree(workspace);
     worktreeId = worktree.id;
-    await patchSessionEntryCore(
-      {
-        agentId: "main",
-        sessionKey: key,
-        storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
-      },
-      (entry) => ({
-        ...entry!,
-        spawnedCwd: worktree.path,
-        worktree: { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot },
-      }),
-    );
-    expect(loadSessionEntry({ agentId: "main", sessionKey: key })?.worktree?.id).toBe(worktree.id);
 
-    const reset = await directSessionReq<{ deleted?: boolean }>("sessions.reset", { key });
+    const reset = await directSessionReq<SessionsDeleteResult>("sessions.reset", { key });
 
     expect(reset).toMatchObject({ ok: true, payload: { deleted: true } });
+    expect(reset.payload).not.toHaveProperty("worktreePreserved");
     expect(loadSessionEntry({ agentId: "main", sessionKey: key })).toBeUndefined();
     expect(getRegistryWorktree(process.env, worktree.id)?.removedAt).toEqual(expect.any(Number));
     await expect(fs.access(worktree.path)).rejects.toThrow();
   } finally {
+    if (worktreeId && getRegistryWorktree(process.env, worktreeId)?.removedAt === undefined) {
+      await managedWorktrees.remove({
+        id: worktreeId,
+        reason: "test-cleanup",
+        allowSnapshotLoss: true,
+      });
+    }
+    await disposeSessionReadContexts();
+    testState.agentConfig = undefined;
+    await openClawState.cleanup();
+  }
+});
+
+test("sessions.reset reports a preserved Incognito worktree like sessions.delete", async () => {
+  const openClawState = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-incognito-reset-worktree-busy-",
+  });
+  const workspace = await initializeRemoteBackedGitWorkspace(openClawState.root);
+  closeOpenClawStateDatabaseForTest();
+  testState.agentConfig = { workspace };
+  await createSessionStoreDir();
+  let worktreeId: string | undefined;
+  let runLease: Awaited<ReturnType<typeof acquireWorktreeRunLease>> | undefined;
+  try {
+    const { key, worktree } = await createIncognitoSessionWithWorktree(workspace);
+    worktreeId = worktree.id;
+    runLease = await acquireWorktreeRunLease(worktree.id);
+
+    const reset = await directSessionReq<SessionsDeleteResult>("sessions.reset", { key });
+
+    expect(reset).toMatchObject({
+      ok: true,
+      payload: {
+        deleted: true,
+        worktreePreserved: {
+          id: worktree.id,
+          path: worktree.path,
+          branch: worktree.branch,
+          reason: "busy",
+        },
+      },
+    });
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key })).toBeUndefined();
+    expect(getRegistryWorktree(process.env, worktree.id)?.removedAt).toBeUndefined();
+    await fs.access(worktree.path);
+  } finally {
+    await runLease?.release();
     if (worktreeId && getRegistryWorktree(process.env, worktreeId)?.removedAt === undefined) {
       await managedWorktrees.remove({
         id: worktreeId,
