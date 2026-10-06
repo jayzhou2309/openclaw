@@ -178,6 +178,7 @@ describe("OpenAI completions reasoning", () => {
       string | undefined,
     ][] = [
       [native, "minimal", "low"],
+      [{ id: "gpt-6-astra" }, "medium", "medium"],
       [mapped, "medium", "default"],
       [mapped, "off", "none"],
       [
@@ -218,6 +219,7 @@ describe("OpenAI completions reasoning", () => {
   it.each([
     { id: "gpt-5.4-mini", expected: undefined },
     { id: "gpt-5.6-luna", expected: "none" },
+    { id: "gpt-6-astra", expected: undefined },
     {
       id: "gpt-5.5",
       provider: "custom-openai",
