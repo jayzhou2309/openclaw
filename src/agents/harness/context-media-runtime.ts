@@ -5,10 +5,7 @@ import type { ImageContent } from "../../llm/types.js";
 import { prepareFileContextFromMedia } from "../../media-understanding/file-context.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { isImageMediaFact, readPersistedMediaFacts } from "../../media/media-facts.js";
-import {
-  buildPromptImageFailureNotice,
-  detectAndLoadPromptImages,
-} from "../embedded-agent-runner/run/images.js";
+import { detectAndLoadPromptImages } from "../embedded-agent-runner/run/images.js";
 import {
   readPersistedImageBlockFactIndexes,
   readPersistedMediaImageLayout,
@@ -114,8 +111,12 @@ export async function prepareHarnessContextMedia(params: {
       entries.push({ image, sourceIndex: page.attachmentIndex, sequence: entries.length });
     }
   }
+  // Retained turns are history: the active-turn resend instruction would make
+  // the model disown an answer it gave while the image was readable.
   if (failedImages) {
-    text.push(buildPromptImageFailureNotice(failedImages));
+    text.push(
+      `[${failedImages} referenced image${failedImages === 1 ? "" : "s"} not included in this context]`,
+    );
   }
   if (
     (imageFacts.length || inlineImages.length) &&
