@@ -39,10 +39,11 @@ type StoryVerse = { block: StoryBlock } | { inline: StoryInline[] };
 export type Story = StoryVerse[];
 
 // In running prose a bare URL never ends in sentence punctuation or a stray paren. A closing
-// paren ends the URL only when it balances one inside it, as in .../wiki/Function_(mathematics).
+// paren ends the URL only when it balances one inside it, as in .../wiki/Function_(mathematics),
+// with groups nested up to two deep.
 const URL_CHAR = String.raw`[^\s<>"\]()]`;
 const URL_END_CHAR = String.raw`[^\s<>"\]().,;:!?]`;
-const URL_PAREN_GROUP = String.raw`\(${URL_CHAR}*\)`;
+const URL_PAREN_GROUP = String.raw`\((?:${URL_CHAR}|\(${URL_CHAR}*\))*\)`;
 const URL_OPEN_PAREN = String.raw`\((?!${URL_CHAR}*\))(?=${URL_END_CHAR})`;
 const URL_UNIT = `${URL_END_CHAR}|${URL_PAREN_GROUP}|${URL_OPEN_PAREN}`;
 const BARE_URL_PATTERN = new RegExp(
