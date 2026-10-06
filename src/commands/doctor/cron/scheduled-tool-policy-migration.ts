@@ -55,11 +55,23 @@ function usesToolRuntime(raw: Record<string, unknown>): boolean {
 function migrateScheduledToolPolicy(
   raw: Record<string, unknown>,
 ): ScheduledToolPolicyMigrationResult {
+  const owner = readRecord(raw.owner);
+  const ownerSessionKey = normalizeOptionalString(owner?.sessionKey);
+  const ownerAccountId = normalizeOptionalAccountId(
+    typeof owner?.accountId === "string" ? owner.accountId : undefined,
+  );
   if (!usesToolRuntime(raw)) {
-    return {
-      mutated: false,
-      status: raw.scheduledToolPolicy === undefined ? "not-applicable" : "invalid",
-    };
+    if (raw.scheduledToolPolicy === undefined) {
+      return { mutated: false, status: "not-applicable" };
+    }
+    // Cron keeps an owner-consistent account policy on tool-free jobs as the
+    // ceiling for a later conversion back to a tool-running payload.
+    const dormant = resolveCronScheduledToolPolicy({
+      toolsAllow: [],
+      scheduledToolPolicy: raw.scheduledToolPolicy,
+      owner: { sessionKey: ownerSessionKey, accountId: ownerAccountId },
+    });
+    return { mutated: false, status: dormant?.mode === "account" ? "current" : "invalid" };
   }
   const payload = readRecord(raw.payload);
   const toolsAllow =
@@ -67,11 +79,6 @@ function migrateScheduledToolPolicy(
     payload.toolsAllow.every((value): value is string => typeof value === "string")
       ? payload.toolsAllow
       : undefined;
-  const owner = readRecord(raw.owner);
-  const ownerSessionKey = normalizeOptionalString(owner?.sessionKey);
-  const ownerAccountId = normalizeOptionalAccountId(
-    typeof owner?.accountId === "string" ? owner.accountId : undefined,
-  );
 
   if (raw.scheduledToolPolicy !== undefined) {
     const normalized = normalizeCronScheduledToolPolicy(raw.scheduledToolPolicy);
