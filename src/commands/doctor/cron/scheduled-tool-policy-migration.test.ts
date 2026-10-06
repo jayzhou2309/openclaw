@@ -118,6 +118,30 @@ describe("migrateScheduledToolPolicy", () => {
     ]);
   });
 
+  it("accepts a dormant account policy on a tool-free command job", () => {
+    const policy = {
+      version: 1,
+      mode: "account",
+      ownerSessionKey: "agent:main:discord:group:ops",
+      ownerAccountId: "work",
+    };
+    const raw = job({
+      payload: { kind: "command", argv: ["sh", "-lc", "true"] },
+      scheduledToolPolicy: policy,
+    });
+    const result = normalizeStoredCronJobs([raw]);
+    expect(result.invalidScheduledToolPolicyJobs).toEqual([]);
+    expect(raw.scheduledToolPolicy).toEqual(policy);
+
+    const inconsistent = job({
+      payload: { kind: "command", argv: ["sh", "-lc", "true"] },
+      scheduledToolPolicy: { ...policy, ownerAccountId: "personal" },
+    });
+    expect(normalizeStoredCronJobs([inconsistent]).invalidScheduledToolPolicyJobs).toEqual([
+      "Legacy",
+    ]);
+  });
+
   it("preserves valid trusted provenance", () => {
     const raw = job({ scheduledToolPolicy: { version: 1, mode: "trusted" } });
     const result = normalizeStoredCronJobs([raw]);
