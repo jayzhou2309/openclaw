@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { pathExists } from "@openclaw/fs-safe/advanced";
 import { stableHomebrewNodePathCandidates } from "@openclaw/normalization-core/stable-node-path";
 
@@ -15,4 +16,18 @@ export async function resolveStableNodePath(nodePath: string): Promise<string> {
     }
   }
   return nodePath;
+}
+
+/**
+ * Child launches keep the running executable. Once a Homebrew upgrade removed
+ * its Cellar keg, launch the formula's stable path instead of failing ENOENT.
+ */
+export function resolveLaunchableNodePath(nodePath = process.execPath): string {
+  if (existsSync(nodePath)) {
+    return nodePath;
+  }
+  return (
+    stableHomebrewNodePathCandidates(nodePath).find((candidate) => existsSync(candidate)) ??
+    nodePath
+  );
 }
