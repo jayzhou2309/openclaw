@@ -550,10 +550,15 @@ export function buildOpenAICompletionsRequest(
   }
   if (params.tools?.length && isKnownOpenAICompletionsEndpoint(model)) {
     // Native Chat Completions rejects tools with enabled GPT-5.6 reasoning,
-    // and rejects the effort field entirely for GPT-5.4 Mini and GPT-5.5 tools.
+    // and rejects the effort field entirely for GPT-5.4 Mini, GPT-5.5, and
+    // GPT-6 Astra tools. Astra cannot disable reasoning, so "none" is not an option.
     if (isOpenAIGpt56Model(model)) {
       params.reasoning_effort = "none";
-    } else if (isOpenAIGpt54MiniModel(model) || isOpenAIGpt55Model(model)) {
+    } else if (
+      isOpenAIGpt54MiniModel(model) ||
+      isOpenAIGpt55Model(model) ||
+      model.id === "gpt-6-astra"
+    ) {
       delete params.reasoning_effort;
     }
   }
