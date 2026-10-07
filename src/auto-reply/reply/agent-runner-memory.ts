@@ -12,7 +12,6 @@ import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import {
   classifyCompactionReason,
-  formatUnknownCompactionReasonDetail,
   isBenignCompactionSkipResult,
 } from "../../agents/embedded-agent-runner/compact-reasons.js";
 import type { AcceptedCompactionSuccessor } from "../../agents/embedded-agent-runner/compaction-successor.js";
@@ -806,16 +805,14 @@ export async function runSessionCompactionIfNeeded(params: {
         return entry;
       }
       await notifyTerminalCompaction("incomplete");
-      const reasonClass = classifyCompactionReason(reason);
-      const reasonDetail =
-        reasonClass === "unknown" ? formatUnknownCompactionReasonDetail(reason) : undefined;
+      const attemptedModel = result?.attemptedModel;
       preflightCompactionLog.warn("preflight compaction failed", {
         stage: "preflight",
         sessionKey: params.sessionKey,
-        provider: params.followupRun.run.provider,
-        model: params.followupRun.run.model,
-        reasonClass,
-        ...(reasonDetail ? { reasonDetail } : {}),
+        ...(attemptedModel
+          ? { provider: attemptedModel.provider, model: attemptedModel.model }
+          : {}),
+        reasonClass: result?.failure?.reason ?? classifyCompactionReason(reason),
       });
       throw new Error(`Preflight compaction required but failed: ${reason}`);
     }

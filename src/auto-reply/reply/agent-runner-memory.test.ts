@@ -403,6 +403,7 @@ describe("runMemoryFlushIfNeeded", () => {
     rootDir = path.join(suiteRoot, `case-${++caseCount}`);
     await fs.mkdir(rootDir);
     registerMemoryFlushPlanResolverForTest(createMemoryFlushPlan);
+    preflightCompactionWarnMock.mockClear();
     runWithModelFallbackMock.mockReset().mockImplementation(async ({ provider, model, run }) => ({
       result: await run(provider, model, {
         modelRoutingProvenance: modelRoutingProvenance(provider, model),
@@ -1390,6 +1391,41 @@ describe("runMemoryFlushIfNeeded", () => {
       expect(refreshQueuedFollowupSessionMock).not.toHaveBeenCalled();
     },
   );
+
+  it("warns with the compaction target and failover class when preflight compaction fails", async () => {
+    const reason = "Turn prefix summarization failed: 429 quota exceeded PROMPT_SENTINEL";
+    compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
+      ok: false,
+      compacted: false,
+      reason,
+      attemptedModel: { provider: "openai", model: "gpt-5-nano" },
+      failure: { reason: "rate_limit", status: 429 },
+    });
+    const sessionEntry: SessionEntry = createFlushSessionEntry({
+      totalTokens: 180_499,
+      compactionCount: 0,
+    });
+
+    await expect(
+      runDefaultPreflight(sessionEntry, {
+        modelContextTokens: 200_000,
+        sessionStore: { main: sessionEntry },
+        sessionKey: "main",
+        ...createCompactionLifecycle(createReplyOperation()),
+      }),
+    ).rejects.toThrow(`Preflight compaction required but failed: ${reason}`);
+
+    expect(preflightCompactionWarnMock).toHaveBeenCalledExactlyOnceWith(
+      "preflight compaction failed",
+      {
+        stage: "preflight",
+        sessionKey: "main",
+        provider: "openai",
+        model: "gpt-5-nano",
+        reasonClass: "rate_limit",
+      },
+    );
+  });
 
   it("estimates Codex tool-result mirrors through the provider projection after provider usage after runtime cutover", async () => {
     const providerPromptTokens = 20_000;

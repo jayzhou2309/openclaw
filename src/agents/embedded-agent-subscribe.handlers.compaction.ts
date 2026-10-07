@@ -2,12 +2,10 @@ import { emitAgentEvent } from "../infra/agent-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { recordSessionCompacted } from "../sessions/session-state-events.js";
 import { stripStaleAssistantUsageBeforeLatestCompaction } from "./compaction-usage.js";
-import {
-  classifyCompactionReason,
-  formatUnknownCompactionReasonDetail,
-} from "./embedded-agent-runner/compact-reasons.js";
+import { classifyCompactionReason } from "./embedded-agent-runner/compact-reasons.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
+import { resolveFailoverReasonFromError } from "./failover-error.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
 
 type SessionCompactionStartEvent = Extract<AgentSessionEvent, { type: "compaction_start" }>;
@@ -185,20 +183,25 @@ export function handleCompactionEnd(
   const outcomeReason =
     outcome.status === "skipped" || outcome.status === "failed" ? outcome.reason : undefined;
   if (!completed) {
-    const reasonClass = outcomeReason ? classifyCompactionReason(outcomeReason) : "aborted";
-    const reasonDetail =
-      reasonClass === "unknown" ? formatUnknownCompactionReasonDetail(outcomeReason) : undefined;
+    const reasonClass = outcomeReason
+      ? (resolveFailoverReasonFromError(new Error(outcomeReason)) ??
+        classifyCompactionReason(outcomeReason))
+      : "aborted";
+    const stage = reason === "manual" ? "manual" : "auto";
+    const provider = ctx.params.session.model?.provider;
+    const model = ctx.params.session.model?.id;
     const metadata = {
       event: "embedded_run_compaction_end",
       runId: ctx.params.runId,
+      stage,
+      provider,
+      model,
       reason,
       outcome: outcome.status,
       completed: false,
       willRetry: false,
       reasonClass,
-      ...(outcomeReason ? { outcomeReason } : {}),
-      ...(reasonDetail ? { reasonDetail } : {}),
-      consoleMessage: `embedded run ${kind} ${outcome.status}: runId=${ctx.params.runId} reason=${reasonClass}${reasonDetail ? ` detail=${reasonDetail}` : ""}`,
+      consoleMessage: `embedded run ${kind} ${outcome.status}: stage=${stage} provider=${provider} model=${model} runId=${ctx.params.runId} reason=${reasonClass}`,
     };
     const benign =
       outcome.status === "aborted" ||

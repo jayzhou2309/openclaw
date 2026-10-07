@@ -104,28 +104,31 @@ describe("compaction handlers", () => {
     });
   });
 
-  it("bounds unknown failure diagnostics while preserving live usage", async () => {
+  it("logs failed auto-compaction with its target and failover class, not the raw reason", async () => {
     const messages = [assistant(1_000)];
     const before = usage(messages);
     const ctx = createCompactionContext(messages);
-    const reason = `Provider unavailable: ${"provider detail ".repeat(100)}`;
+    Object.assign(ctx.params.session, { model: { provider: "openai", id: "gpt-5-mini" } });
+    const reason = "Auto-compaction failed: 429 quota exceeded PROMPT_SENTINEL";
     await handleCompactionEnd(ctx, {
       type: "compaction_end",
-      reason: "overflow",
+      reason: "threshold",
       outcome: { status: "failed", reason },
     });
-    expect(ctx.log.warn).toHaveBeenCalledExactlyOnceWith(
-      "embedded run auto-compaction failed",
-      expect.objectContaining({
-        event: "embedded_run_compaction_end",
-        reason: "overflow",
-        outcome: "failed",
-        reasonClass: "unknown",
-        outcomeReason: reason,
-        reasonDetail: expect.stringMatching(/^.{100}$/),
-        consoleMessage: expect.not.stringContaining("provider detail provider detail"),
-      }),
-    );
+    expect(ctx.log.warn).toHaveBeenCalledExactlyOnceWith("embedded run auto-compaction failed", {
+      event: "embedded_run_compaction_end",
+      runId: "run-test",
+      stage: "auto",
+      provider: "openai",
+      model: "gpt-5-mini",
+      reason: "threshold",
+      outcome: "failed",
+      completed: false,
+      willRetry: false,
+      reasonClass: "rate_limit",
+      consoleMessage:
+        "embedded run auto-compaction failed: stage=auto provider=openai model=gpt-5-mini runId=run-test reason=rate_limit",
+    });
     expect(usage(messages)).toEqual(before);
   });
 

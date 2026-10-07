@@ -363,6 +363,24 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     },
   );
 
+  it("reports the compaction override model on a failed direct compaction", async () => {
+    sessionCompactImpl.mockRejectedValueOnce(
+      Object.assign(new Error("429 quota exceeded"), { status: 429 }),
+    );
+    const result = await compactEmbeddedAgentSessionDirect(
+      wrappedCompactionArgs({
+        provider: "openai",
+        model: "gpt-5-mini",
+        config: { agents: { defaults: { compaction: { model: "openai/gpt-5-nano" } } } },
+      }),
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      attemptedModel: { provider: "openai", model: "gpt-5-nano" },
+      failure: { reason: "rate_limit", status: 429 },
+    });
+  });
+
   it("restricts compact endpoint tools and omits private skills under a finite policy", async () => {
     resolveSkillsPromptMock.mockResolvedValue("PRIVATE_SKILL_MARKER");
     createOpenClawCodingToolsMock.mockReturnValue(

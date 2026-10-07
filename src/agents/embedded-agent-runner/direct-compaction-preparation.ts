@@ -127,6 +127,7 @@ export async function prepareDirectCompactionAttempt(
       ok: false,
       compacted: false,
       reason,
+      attemptedModel: { provider, model: modelId },
       failure: failure
         ? {
             reason: failure.reason,
