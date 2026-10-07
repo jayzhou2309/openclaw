@@ -102,6 +102,10 @@ vi.mock("./openclaw-agent-db.js", () => ({
   openOpenClawAgentDatabase: edge.open,
   getOpenClawAgentDatabaseIfOpen: () => edge.database,
 }));
+vi.mock("./openclaw-agent-db-schema.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./openclaw-agent-db-schema.js")>()),
+  refreshOpenClawAgentDatabaseSchema: () => undefined,
+}));
 vi.mock("./openclaw-agent-db-identity.js", () => ({
   readOpenClawAgentDatabaseIdentity: () => ({
     identity: "fixture",
@@ -167,6 +171,7 @@ function retireFailedReply(
   const reject = vi.fn((error: unknown) => completion.resolve(error));
   const settleNative = vi.fn();
   const job: Job = {
+    observation: { started() {}, completed() {} },
     request,
     bytes: 0,
     nativeDispatched: true,
@@ -370,7 +375,11 @@ it.each([
       expect(settleNative).not.toHaveBeenCalled();
       retired.resolve();
       const failure = await completion.promise;
-      expect(settleNative).toHaveBeenCalledExactlyOnceWith({ kind: "unknown", error: failure });
+      expect(settleNative).toHaveBeenCalledExactlyOnceWith({
+        kind: "unknown",
+        error: failure,
+        nativeStopped: true,
+      });
       if (outcome === "direct refusal") {
         expect(failure).toBe(refused);
       } else {
@@ -461,6 +470,7 @@ describe("committed agent registration across failed native opening", () => {
         expect(settleNative).toHaveBeenCalledExactlyOnceWith({
           kind: "unknown",
           error: expect.objectContaining({ message: openingError.message }),
+          nativeStopped: true,
         });
         expect(failure).toMatchObject({
           cause: {
@@ -529,6 +539,7 @@ describe("committed agent registration across failed native opening", () => {
         expect(settleNative).toHaveBeenCalledExactlyOnceWith({
           kind: "unknown",
           error: expect.objectContaining({ message: cleanupFailure.message }),
+          nativeStopped: true,
         });
       } finally {
         retired.resolve();
@@ -604,6 +615,7 @@ describe("committed agent registration across failed native opening", () => {
       expect(settleNative).toHaveBeenCalledExactlyOnceWith({
         kind: "unknown",
         error: expect.objectContaining({ message: reply.error.message }),
+        nativeStopped: true,
       });
     },
   );

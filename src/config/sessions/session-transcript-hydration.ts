@@ -3,7 +3,6 @@ import { readOpenClawAgentDatabase } from "../../state/openclaw-agent-db-readonl
 import { assertAgentDatabaseTerminalOpenAllowed } from "../../state/openclaw-agent-db-terminal.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent-execution-incognito.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";
 import {
   readLatestSessionTranscriptMessageEvent,
@@ -18,6 +17,8 @@ import {
   type ResolvedTranscriptReadScope,
 } from "./session-accessor.sqlite-scope.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
+import type { IncognitoSessionActor } from "./session-incognito-actor.js";
+import { captureIncognitoSessionHistoryBinding } from "./session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
 import type {
   IncognitoHistoryOperations,
@@ -38,14 +39,32 @@ import type {
 } from "./session-transcript-worker.types.js";
 import { captureSessionTranscriptTargetBinding } from "./transcript-target-binding.js";
 
+type SessionTranscriptHydrationReader = {
+  target: ReturnType<typeof captureSessionTranscriptTargetBinding>;
+  assertCurrent: () => void;
+  read: () => Promise<PreparedSessionTranscriptHydration>;
+  readCurrentTurnEntry: (
+    request: SessionTranscriptCurrentTurnEntryRequest,
+  ) => Promise<SessionTranscriptCurrentTurnEntryRead>;
+  readMaintenance: (
+    request: SessionTranscriptMaintenanceRead,
+  ) => Promise<IncognitoHistoryOperations["session.history.maintenance"]["output"]>;
+  readRecentActiveEvents: (
+    maxEvents: number,
+  ) => Promise<IncognitoHistoryOperations["session.history.recent-active-events"]["output"]>;
+  readLatestActiveMessage: () => Promise<
+    IncognitoHistoryOperations["session.history.latest-active-message"]["output"]
+  >;
+};
+
 /** Inactive until P7d: the caller supplies the sole actor for this captured session. */
 export function prepareIncognitoSessionTranscriptHydration(params: {
-  actor: IncognitoAgentDatabaseExecution;
+  actor: IncognitoSessionActor;
   authority: IncognitoSessionAuthority;
   target: IncognitoHistoryTarget;
   limits?: { maxBytes: number; maxEvents: number };
   signal?: AbortSignal;
-}): ReturnType<typeof prepareSessionTranscriptHydration> {
+}): SessionTranscriptHydrationReader {
   const { actor, authority, signal } = params;
   actor.assertCurrent();
   authority.assertCurrent();
@@ -101,7 +120,11 @@ export function prepareSessionTranscriptHydration(
   source: SessionTranscriptRuntimeTarget & { env?: NodeJS.ProcessEnv },
   limits?: { maxBytes: number; maxEvents: number },
   signal?: AbortSignal,
-) {
+): SessionTranscriptHydrationReader {
+  const incognito = captureIncognitoSessionHistoryBinding(source);
+  if (incognito) {
+    return prepareIncognitoSessionTranscriptHydration({ ...incognito, limits, signal });
+  }
   const target = captureSessionTranscriptTargetBinding(source);
   const contextLimits = limits
     ? { maxBytes: limits.maxBytes, maxEvents: limits.maxEvents }

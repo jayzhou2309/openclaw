@@ -64,7 +64,6 @@ type ChatModelPickerParams = {
   triggerModelValue?: string;
   triggerStatusLabel?: string;
   triggerLoading?: boolean;
-  triggerStarting?: boolean;
   onModelSetup?: () => void;
   onProviderSettings?: (provider: string) => void;
   onOpen?: () => unknown;
@@ -113,7 +112,6 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
     params.contextWindow?.selected !== params.contextWindow?.defaultId;
   const triggerTitle = [
     params.triggerStatusLabel ?? params.triggerModelLabel,
-    params.triggerStarting ? t("chat.modelControls.modelStarting") : "",
     modelToolsUnavailable ? t("chat.modelControls.chatOnly") : "",
   ]
     .filter(Boolean)
@@ -237,7 +235,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
         aria-label=${`${t("chat.selectors.model")}: ${triggerTitle}${
           params.selectionScopeDescription ? `. ${params.selectionScopeDescription}` : ""
         }`}
-        aria-busy=${params.triggerLoading || params.triggerStarting ? "true" : "false"}
+        aria-busy=${params.triggerLoading ? "true" : "false"}
         aria-disabled=${params.disabled ? "true" : "false"}
         title=${params.disabledReason?.trim() || nothing}
         @click=${(event: MouseEvent) => {
@@ -284,9 +282,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
             : nothing
         }
         <span class="chat-controls__inline-select-chevron" aria-hidden="true"
-          >${
-            params.triggerStarting ? html`<span class="btn__spinner"></span>` : icons.chevronUp
-          }</span
+          >${icons.chevronUp}</span
         >
       </summary>
       <wa-popup data-anchored-overlay>
@@ -347,6 +343,18 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                     params.modelOptions.length > 0,
                     hasSelectableModelOptions,
                     params.onModelSetup,
+                    undefined,
+                    undefined,
+                    // Claude Code logs in outside OpenClaw, so name the command. missing-auth also
+                    // covers a disabled plugin or a missing account pin, so the copy stays conditional.
+                    params.modelOptions.some(
+                      (option) =>
+                        option.unavailableReason === "missing-auth" &&
+                        resolveModelRuntimeRoute(option.provider, option.agentRuntimeId) ===
+                          "claudeCli",
+                    )
+                      ? t("chat.modelControls.claudeCliNotReady")
+                      : undefined,
                   )}
                   ${
                     hasOptions || params.accountSection
