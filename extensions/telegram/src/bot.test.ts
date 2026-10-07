@@ -485,7 +485,7 @@ async function writeDirectTelegramTranscriptContext(params: {
     ...conversation,
     threadSpec: { scope: "none" },
   });
-  const sessionKey = resolveTelegramTargetSession({ ...conversation, route });
+  const { sessionKey } = resolveTelegramTargetSession({ ...conversation, route });
   await upsertSessionEntry({
     storePath: params.storePath,
     sessionKey,
