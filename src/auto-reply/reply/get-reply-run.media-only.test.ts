@@ -343,7 +343,8 @@ vi.mock("./session-system-events.js", () => ({
   drainFormattedSystemEvents: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("../../sessions/stored-model-overrides.js", () => ({
+vi.mock("../../sessions/stored-model-overrides.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../sessions/stored-model-overrides.js")>()),
   resolveStoredModelOverride: vi.fn(
     (params: {
       sessionEntry?: { providerOverride?: string; modelOverride?: string };
