@@ -111,8 +111,7 @@ export async function prepareHarnessContextMedia(params: {
       entries.push({ image, sourceIndex: page.attachmentIndex, sequence: entries.length });
     }
   }
-  // Retained turns are history: the active-turn resend instruction would make
-  // the model disown an answer it gave while the image was readable.
+  // A historical reload failure does not invalidate an earlier image answer.
   if (failedImages) {
     text.push(
       `[${failedImages} referenced image${failedImages === 1 ? "" : "s"} not included in this context]`,

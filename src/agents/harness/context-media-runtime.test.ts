@@ -1,29 +1,21 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { AgentMessage } from "../runtime/index.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { prepareHarnessContextMedia } from "./context-media-runtime.js";
 
-const workspaces: string[] = [];
-
-afterEach(async () => {
-  await Promise.all(
-    workspaces.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-  );
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("prepareHarnessContextMedia", () => {
   it("marks an unrestorable historical image neutrally instead of asking for a resend", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-context-media-"));
-    workspaces.push(workspaceDir);
+    const workspaceDir = tempDirs.make("openclaw-context-media-");
     const message = {
-      role: "user",
+      role: "user" as const,
       content: "what is this?",
+      timestamp: 1,
       __openclaw: {
         media: [{ path: path.join(workspaceDir, "gone.png"), contentType: "image/png" }],
       },
-    } as unknown as AgentMessage;
+    };
 
     const result = await prepareHarnessContextMedia({
       message,
