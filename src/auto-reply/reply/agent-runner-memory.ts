@@ -14,9 +14,9 @@ import {
   classifyCompactionReason,
   isBenignCompactionSkipResult,
 } from "../../agents/embedded-agent-runner/compact-reasons.js";
-import { resolveEmbeddedCompactionTarget } from "../../agents/embedded-agent-runner/compaction-runtime-context.js";
 import type { AcceptedCompactionSuccessor } from "../../agents/embedded-agent-runner/compaction-successor.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
+import type { CompactionAttemptTarget } from "../../agents/embedded-agent-runner/run/compaction-accounting-bridge.js";
 import { createDeferredEmbeddedRunLifecycleManager } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import { createToolResultPromptProjectionState } from "../../agents/embedded-agent-runner/session-prompt-state.js";
 import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
@@ -681,6 +681,8 @@ export async function runSessionCompactionIfNeeded(params: {
   try {
     await notifyCompaction("start");
     assertActive();
+    // A reload during preparation can admit a summary model the caller's config never named.
+    let admittedCompactionTarget: CompactionAttemptTarget | undefined;
     const runtime = await embeddedAgentRuntimeLoader.load();
     const result = await runtime.compactEmbeddedAgentSession(
       {
@@ -788,6 +790,9 @@ export async function runSessionCompactionIfNeeded(params: {
           );
           hostAccountingCommitted = true;
         },
+        onCompactionTargetAdmitted: (target) => {
+          admittedCompactionTarget = target;
+        },
         onCommitted: (accepted) => {
           expectedSession = accepted.entry;
           entry = accepted.entry;
@@ -807,17 +812,10 @@ export async function runSessionCompactionIfNeeded(params: {
         return entry;
       }
       await notifyTerminalCompaction("incomplete");
-      const summaryTarget = resolveEmbeddedCompactionTarget({
-        config: params.cfg,
-        provider: params.followupRun.run.provider,
-        modelId: params.followupRun.run.model,
-        modelSelectionLocked: entry.modelSelectionLocked === true,
-      });
       preflightCompactionLog.warn("preflight compaction failed", {
         stage: "preflight",
         sessionKey: params.sessionKey,
-        provider: summaryTarget.provider,
-        model: summaryTarget.model,
+        ...admittedCompactionTarget,
         reasonClass:
           result?.failure?.reason ??
           resolveFailoverReasonFromError(new Error(reason)) ??

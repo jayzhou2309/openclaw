@@ -39,6 +39,7 @@ import {
 import { log } from "./logger.js";
 import { resolveTieredModel } from "./model-resolution.js";
 import { resolveModelAsync } from "./model.js";
+import { readCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
 import type {
   TranscriptByteCompactionPersistence,
   TranscriptByteCompactionPersistenceAsync,
@@ -95,6 +96,11 @@ export async function prepareDirectCompactionAttempt(
     modelId: params.model,
     boundHarnessRuntime: params.agentHarnessId,
     preparedRuntimePlan: params.runtimePlan,
+  });
+  // Failure attribution must name the target admitted here, not the caller's config snapshot.
+  readCompactionAccountingRecorder(params.contextEngineRuntimeContext)?.recordCompactionTarget?.({
+    provider,
+    model: modelId,
   });
   // Keep the configured provider for harness policy, while auth/model loading below can
   // route OpenAI compaction through Codex OAuth when that runtime owns the session credentials.

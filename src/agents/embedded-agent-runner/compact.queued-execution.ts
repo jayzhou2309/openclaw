@@ -46,6 +46,7 @@ import { declarePromptHistoryRewrite } from "./prompt-cache-observability.js";
 import {
   attachCompactionAccountingRecorder,
   type CompactionAccountingReceipt,
+  type CompactionAttemptTarget,
 } from "./run/compaction-accounting-bridge.js";
 import {
   setTranscriptBytePreflightClaim,
@@ -71,6 +72,7 @@ export type QueuedCompactionHostOptions = CompactionRequestConstraints & {
   onCommitted?: (accepted: AcceptedCompactionSuccessor) => void;
   onHostCompactionCommitted?: (commit: QueuedCompactionHostCommit) => Promise<void> | void;
   onHostCompactionTranscriptSettled?: (commit: QueuedCompactionHostCommit) => Promise<void> | void;
+  onCompactionTargetAdmitted?: (target: CompactionAttemptTarget) => void;
 };
 
 export function createQueuedCompactionAbortedResult(): EmbeddedAgentCompactResult {
@@ -338,6 +340,7 @@ export async function executeQueuedContextEngineCompaction(input: {
                   declarePromptHistoryRewrite({ ...runtimeTarget, reason: "compaction" });
                   committedCompaction = receipt;
                 },
+                recordCompactionTarget: host.onCompactionTargetAdmitted,
               });
             }
             // Retained backend work keeps the original owner and the timer's

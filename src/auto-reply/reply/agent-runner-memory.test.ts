@@ -1392,9 +1392,13 @@ describe("runMemoryFlushIfNeeded", () => {
     },
   );
 
-  it("warns with the compaction model and failover class when preflight compaction fails", async () => {
+  it("warns with the admitted compaction model and failover class when preflight compaction fails", async () => {
     const reason = "Turn prefix summarization failed: 429 quota exceeded PROMPT_SENTINEL";
-    compactEmbeddedAgentSessionMock.mockResolvedValueOnce({ ok: false, compacted: false, reason });
+    // A reload during preparation can admit a summary model the caller's config never named.
+    compactEmbeddedAgentSessionMock.mockImplementationOnce(async (_params, host) => {
+      host?.onCompactionTargetAdmitted?.({ provider: "anthropic", model: "claude-reloaded" });
+      return { ok: false, compacted: false, reason };
+    });
     const sessionEntry: SessionEntry = createFlushSessionEntry({
       totalTokens: 180_499,
       compactionCount: 0,
@@ -1415,10 +1419,34 @@ describe("runMemoryFlushIfNeeded", () => {
       {
         stage: "preflight",
         sessionKey: "main",
-        provider: "openai",
-        model: "gpt-5-nano",
+        provider: "anthropic",
+        model: "claude-reloaded",
         reasonClass: "rate_limit",
       },
+    );
+  });
+
+  it("omits the compaction model when preflight compaction fails before admitting one", async () => {
+    const reason = "Turn prefix summarization failed: 429 quota exceeded";
+    compactEmbeddedAgentSessionMock.mockResolvedValueOnce({ ok: false, compacted: false, reason });
+    const sessionEntry: SessionEntry = createFlushSessionEntry({
+      totalTokens: 180_499,
+      compactionCount: 0,
+    });
+
+    await expect(
+      runDefaultPreflight(sessionEntry, {
+        cfg: compactionConfig({ memoryFlush: {}, model: "openai/gpt-5-nano" }),
+        modelContextTokens: 200_000,
+        sessionStore: { main: sessionEntry },
+        sessionKey: "main",
+        ...createCompactionLifecycle(createReplyOperation()),
+      }),
+    ).rejects.toThrow(`Preflight compaction required but failed: ${reason}`);
+
+    expect(preflightCompactionWarnMock).toHaveBeenCalledExactlyOnceWith(
+      "preflight compaction failed",
+      { stage: "preflight", sessionKey: "main", reasonClass: "rate_limit" },
     );
   });
 

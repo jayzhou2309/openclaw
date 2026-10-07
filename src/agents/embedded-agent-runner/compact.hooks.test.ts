@@ -2738,6 +2738,54 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     ]);
   });
 
+  it("reports the summary model admitted after a config reload through queued legacy compaction", async () => {
+    const acquire = expectDefined(
+      acquireAgentRunPreparedModelRuntimeMock.getMockImplementation(),
+      "prepared runtime fixture",
+    );
+    const compactionModelConfig = (model: string) =>
+      ({ agents: { defaults: { compaction: { model } } } }) as OpenClawConfig;
+    // Gateway reload commits between the caller's snapshot and lease admission.
+    acquireAgentRunPreparedModelRuntimeMock.mockImplementation(async (input, options) => {
+      const lease = await acquire(input, options);
+      return {
+        ...lease,
+        snapshot: { ...lease.snapshot, config: compactionModelConfig("azure/compact-reloaded") },
+      };
+    });
+    resolveContextEngineMock.mockResolvedValue({
+      info: { ownsCompaction: false },
+      compact: (params: Parameters<ContextEngine["compact"]>[0]) =>
+        delegateCompactionToRuntime(params),
+    } as never);
+    sessionCompactImpl.mockRejectedValueOnce(
+      Object.assign(new Error("400 invalid request body"), { status: 400 }),
+    );
+    const onCompactionTargetAdmitted = vi.fn();
+
+    try {
+      const result = await compactEmbeddedAgentSession(
+        wrappedCompactionArgs({
+          provider: "openai",
+          model: "gpt-primary",
+          config: compactionModelConfig("azure/compact-requested"),
+        }),
+        { onCompactionTargetAdmitted },
+      );
+
+      expect(result.ok).toBe(false);
+      expect(onCompactionTargetAdmitted).toHaveBeenLastCalledWith({
+        provider: "azure",
+        model: "compact-reloaded",
+      });
+      expect(onCompactionTargetAdmitted).not.toHaveBeenCalledWith(
+        expect.objectContaining({ model: "compact-requested" }),
+      );
+    } finally {
+      acquireAgentRunPreparedModelRuntimeMock.mockImplementation(acquire);
+    }
+  });
+
   it("reports cancellation while queued native CLI compaction is in flight", async () => {
     const controller = new AbortController();
     const cancellation = new Error("request timed out");

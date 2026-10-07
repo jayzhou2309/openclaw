@@ -10,6 +10,8 @@ export type CompactionAccountingReceipt = {
   compactionKind: "context-engine" | "server-endpoint";
 };
 
+export type CompactionAttemptTarget = { provider: string; model: string };
+
 type CompactionAccountingRecorder = CompactionRequestConstraints & {
   /** A precheck can require budget recovery while its user request is still pending. */
   pendingRequestState?: "unresolved";
@@ -21,6 +23,8 @@ type CompactionAccountingRecorder = CompactionRequestConstraints & {
   };
   recordUsage?: (usage: NormalizedUsage) => void;
   recordCompaction?: (receipt: CompactionAccountingReceipt) => void;
+  /** Reports each summary target admitted from the prepared runtime config. */
+  recordCompactionTarget?: (target: CompactionAttemptTarget) => void;
 };
 
 // Bind to the actual invocation context after watchdog projection. Public
