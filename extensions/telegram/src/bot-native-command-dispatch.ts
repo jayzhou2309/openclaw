@@ -154,7 +154,7 @@ async function resolveTelegramCommandAuth(params: {
     topicAgentId: scopedConfig.topicConfig?.agentId,
   });
   const { route } = inspectedRoute;
-  const targetSessionKey = resolveTelegramTargetSession({
+  const { sessionKey: targetSessionKey, modelParentSessionKey } = resolveTelegramTargetSession({
     cfg,
     route,
     chatId,
@@ -312,6 +312,7 @@ async function resolveTelegramCommandAuth(params: {
     assertOwnerCurrent,
     route,
     targetSessionKey,
+    modelParentSessionKey,
     inspectedRoute,
     ownerContext,
   };

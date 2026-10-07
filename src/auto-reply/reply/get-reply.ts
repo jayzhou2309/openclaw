@@ -41,7 +41,10 @@ import {
   isModelSelectionLocked,
   ModelSelectionLockedError,
 } from "../../sessions/model-overrides.js";
-import { resolveStoredModelOverride } from "../../sessions/stored-model-overrides.js";
+import {
+  resolveModelParentSessionKey,
+  resolveStoredModelOverride,
+} from "../../sessions/stored-model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import {
@@ -761,10 +764,7 @@ export async function getReplyFromConfig(
     sessionEntry,
     sessionStore,
     sessionKey,
-    parentSessionKey:
-      sessionEntry.parentSessionKey ??
-      sessionCtx.ModelParentSessionKey ??
-      sessionCtx.ParentSessionKey,
+    parentSessionKey: resolveModelParentSessionKey(sessionEntry, sessionCtx),
     defaultProvider,
   });
   const staleHeartbeatAutoFallbackOverride =
@@ -992,10 +992,7 @@ export async function getReplyFromConfig(
         agentId,
         agentCfg,
         ...replySession,
-        parentSessionKey:
-          sessionEntry.parentSessionKey ??
-          sessionCtx.ModelParentSessionKey ??
-          sessionCtx.ParentSessionKey,
+        parentSessionKey: resolveModelParentSessionKey(sessionEntry, sessionCtx),
         defaultProvider,
         defaultModel,
         primaryProvider,
