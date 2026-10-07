@@ -20,6 +20,13 @@ export function flattenMarkdownToPlainText(text: string): string {
     .trim();
 }
 
+/** CommonMark link syntax only breaks on ASCII; U+00A0 and other Unicode spaces belong to the destination. */
+const ASCII_WHITESPACE = /[\t\n\v\f\r ]/;
+
+function isAsciiSpaceOrControl(char: string): boolean {
+  return char <= " " || char === "\x7f";
+}
+
 /** Maps each `(` to its balanced `)` within the same whitespace-free run, skipping escapes. */
 function matchParens(text: string): Map<number, number> {
   const closers = new Map<number, number>();
@@ -28,7 +35,7 @@ function matchParens(text: string): Map<number, number> {
     const char = text.charAt(index);
     if (char === "\\") {
       index += 1;
-    } else if (/\s/.test(char)) {
+    } else if (isAsciiSpaceOrControl(char)) {
       parens.length = 0;
     } else if (char === "(") {
       parens.push(index);
@@ -46,7 +53,7 @@ const TITLE_CLOSERS: Record<string, string> = { '"': '"', "'": "'", "(": ")" };
 
 function skipSpaces(text: string, start: number): number {
   let index = start;
-  while (index < text.length && /\s/.test(text.charAt(index))) {
+  while (index < text.length && ASCII_WHITESPACE.test(text.charAt(index))) {
     index += 1;
   }
   return index;
@@ -69,7 +76,11 @@ function findDestinationEnd(
     }
     index += 1;
   } else {
-    while (index < text.length && text.charAt(index) !== ")" && !/\s/.test(text.charAt(index))) {
+    while (
+      index < text.length &&
+      text.charAt(index) !== ")" &&
+      !isAsciiSpaceOrControl(text.charAt(index))
+    ) {
       if (text.charAt(index) === "(") {
         const closer = parenClosers.get(index);
         if (closer === undefined) {
