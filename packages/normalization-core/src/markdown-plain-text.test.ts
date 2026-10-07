@@ -34,6 +34,17 @@ describe("flattenMarkdownToPlainText", () => {
     ["empty link labels", "Keep [](https://example.com) here", "Keep [](https://example.com) here"],
     ["link titles", 'See [docs](https://example.com "Docs (v2)") now', "See docs now"],
     [
+      "quoted link titles with unbalanced parentheses",
+      "See [docs](https://example.com \"Docs (v2\") and [guide](https://example.com 'Guide v2)') now",
+      "See docs and guide now",
+    ],
+    ["parenthesized link titles", "See [docs](https://example.com (Docs v2)) now", "See docs now"],
+    [
+      "angle-bracket link destinations",
+      "See [docs](<https://example.com/a b(>) now",
+      "See docs now",
+    ],
+    [
       "unclosed link destinations",
       "Keep [this](https://example.com/open( text",
       "Keep [this](https://example.com/open( text",
