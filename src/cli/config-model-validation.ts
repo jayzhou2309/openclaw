@@ -1,5 +1,8 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
-import { hasAgentRosterProperty } from "../agents/agent-scope-config.js";
+import {
+  hasAgentRosterProperty,
+  resolveAgentModelConfigForRuntime,
+} from "../agents/agent-scope-config.js";
 import {
   listAgentEntries,
   listAgentEntriesWithSource,
@@ -111,7 +114,7 @@ function collectTextModelRefs(config: OpenClawConfig): TouchedModelRef[] {
       source.kind === "entries" ? `agents.entries.${source.key}` : `agents.list.${source.index}`;
     refs.push(
       ...collectTextModelConfigRefs({
-        model: agent.model,
+        model: resolveAgentModelConfigForRuntime(agent),
         path: `${agentPath}.model`,
         agentId,
       }),
