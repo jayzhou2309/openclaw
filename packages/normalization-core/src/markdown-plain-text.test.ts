@@ -55,6 +55,16 @@ describe("flattenMarkdownToPlainText", () => {
       "Badge build ok",
     ],
     [
+      "non-breaking spaces inside bare link destinations",
+      "Read [docs](https://example.com/a b) now",
+      "Read docs now",
+    ],
+    [
+      "non-breaking spaces inside link destinations with parentheses",
+      "Read [docs](https://example.com/a(b c)) now",
+      "Read docs now",
+    ],
+    [
       "unclosed link destinations",
       "Keep [this](https://example.com/open( text",
       "Keep [this](https://example.com/open( text",
