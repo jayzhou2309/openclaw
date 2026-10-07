@@ -63,8 +63,15 @@ export async function sanitizeSessionMessagesImages(
         duplicateToolCallIdStyle: options?.duplicateToolCallIdStyle,
       })
     : messages;
+  // The provider already accepted every image before its last successful reply.
+  // Only later images can still poison the next request, so only they pay a full decode.
+  const lastAcceptedReplyIndex = sanitizedIds.findLastIndex(
+    (msg) => msg?.role === "assistant" && msg.stopReason !== "error",
+  );
+  const verifiedImageSanitization = { ...imageSanitization, verifyDecodability: true };
   const out: AgentMessage[] = [];
-  for (const msg of sanitizedIds) {
+  for (const [index, msg] of sanitizedIds.entries()) {
+    const limits = index > lastAcceptedReplyIndex ? verifiedImageSanitization : imageSanitization;
     if (!msg || typeof msg !== "object") {
       out.push(msg);
       continue;
@@ -78,7 +85,7 @@ export async function sanitizeSessionMessagesImages(
         const nextContent = await sanitizeContentBlocksImages(
           Array.isArray(content) ? content : [],
           label,
-          imageSanitization,
+          limits,
         );
         out.push({
           ...contentMsg,
@@ -99,7 +106,7 @@ export async function sanitizeSessionMessagesImages(
         const finalContent = (await sanitizeContentBlocksImages(
           dropEmptyTextBlocks(strippedContent) as unknown as ContentBlock[],
           label,
-          imageSanitization,
+          limits,
         )) as unknown as typeof assistantMsg.content;
         if (finalContent.length > 0 || assistantMsg.providerReplay) {
           out.push(replaceCompactionReplayOwnerContent(assistantMsg, finalContent));
