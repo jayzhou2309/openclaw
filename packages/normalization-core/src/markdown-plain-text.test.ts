@@ -12,6 +12,33 @@ describe("flattenMarkdownToPlainText", () => {
     ],
     ["images", "Status ![green check](https://example.com/check.png)", "Status green check"],
     [
+      "nested link label brackets",
+      "Read the [Report [Q3 [draft]]](https://example.com/r) and then deploy.",
+      "Read the Report [Q3 [draft]] and then deploy.",
+    ],
+    [
+      "balanced destination parentheses",
+      "Read the [report](https://example.com/report_(Q3_(final))) and then deploy.",
+      "Read the report and then deploy.",
+    ],
+    [
+      "escaped destination parentheses",
+      "Read the [report](https://example.com/report\\)Q3) and then deploy.",
+      "Read the report and then deploy.",
+    ],
+    [
+      "images with balanced destination parentheses",
+      "Status ![check](https://example.com/check_(1).png) done",
+      "Status check done",
+    ],
+    ["empty link labels", "Keep [](https://example.com) here", "Keep [](https://example.com) here"],
+    ["link titles", 'See [docs](https://example.com "Docs (v2)") now', "See docs now"],
+    [
+      "unclosed link destinations",
+      "Keep [this](https://example.com/open( text",
+      "Keep [this](https://example.com/open( text",
+    ],
+    [
       "heading and list markers",
       "# Heading\n- bullet\n+ plus\n* star\n2) numbered\n> quote",
       "Heading bullet plus star numbered quote",
@@ -25,5 +52,11 @@ describe("flattenMarkdownToPlainText", () => {
     ["multiline whitespace", "First\n\n  second\t third", "First second third"],
   ])("flattens %s", (_label, input, expected) => {
     expect(flattenMarkdownToPlainText(input)).toBe(expected);
+  });
+
+  it("flattens deeply nested links without exhausting the stack", () => {
+    const depth = 20_000;
+    const input = `${"[".repeat(depth)}deep${"](https://example.com)".repeat(depth)} end`;
+    expect(flattenMarkdownToPlainText(input)).toBe("deep end");
   });
 });
