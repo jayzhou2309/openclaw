@@ -18,16 +18,10 @@ export async function resolveStableNodePath(nodePath: string): Promise<string> {
   return nodePath;
 }
 
-/**
- * Child launches keep the running executable. Once a Homebrew upgrade removed
- * its Cellar keg, launch the formula's stable path instead of failing ENOENT.
- */
+// Keep the running Node version until Homebrew removes its Cellar keg.
 export function resolveLaunchableNodePath(nodePath = process.execPath): string {
   if (existsSync(nodePath)) {
     return nodePath;
   }
-  return (
-    stableHomebrewNodePathCandidates(nodePath).find((candidate) => existsSync(candidate)) ??
-    nodePath
-  );
+  return stableHomebrewNodePathCandidates(nodePath).find(existsSync) ?? nodePath;
 }
