@@ -20,13 +20,9 @@ export function flattenMarkdownToPlainText(text: string): string {
     .trim();
 }
 
-/**
- * Maps each `[` to its balanced `]`, and each `(` to its balanced `)` within the same
- * whitespace-free run, skipping backslash-escaped characters.
- */
-function matchDelimiters(text: string): Map<number, number> {
+/** Maps each `(` to its balanced `)` within the same whitespace-free run, skipping escapes. */
+function matchParens(text: string): Map<number, number> {
   const closers = new Map<number, number>();
-  const brackets: number[] = [];
   const parens: number[] = [];
   for (let index = 0; index < text.length; index += 1) {
     const char = text.charAt(index);
@@ -34,12 +30,10 @@ function matchDelimiters(text: string): Map<number, number> {
       index += 1;
     } else if (/\s/.test(char)) {
       parens.length = 0;
-    } else if (char === "[") {
-      brackets.push(index);
     } else if (char === "(") {
       parens.push(index);
-    } else {
-      const opener = char === "]" ? brackets.pop() : char === ")" ? parens.pop() : undefined;
+    } else if (char === ")") {
+      const opener = parens.pop();
       if (opener !== undefined) {
         closers.set(opener, index);
       }
@@ -62,7 +56,7 @@ function skipSpaces(text: string, start: number): number {
 function findDestinationEnd(
   text: string,
   open: number,
-  closers: Map<number, number>,
+  parenClosers: Map<number, number>,
 ): number | undefined {
   let index = skipSpaces(text, open + 1);
   if (text.charAt(index) === "<") {
@@ -77,7 +71,7 @@ function findDestinationEnd(
   } else {
     while (index < text.length && text.charAt(index) !== ")" && !/\s/.test(text.charAt(index))) {
       if (text.charAt(index) === "(") {
-        const closer = closers.get(index);
+        const closer = parenClosers.get(index);
         if (closer === undefined) {
           return undefined;
         }
@@ -104,9 +98,47 @@ function findDestinationEnd(
   return text.charAt(index) === ")" ? index : undefined;
 }
 
+/**
+ * Maps each link label's `[` to its `]` and that `]` to the end of the `(destination "title")`
+ * that follows it, skipping backslash-escaped characters. Brackets inside a destination or title
+ * are not labels, so they never pair with a label bracket.
+ */
+function matchLinks(text: string): {
+  labelEnds: Map<number, number>;
+  destinationEnds: Map<number, number>;
+} {
+  const labelEnds = new Map<number, number>();
+  const destinationEnds = new Map<number, number>();
+  const parenClosers = matchParens(text);
+  const brackets: number[] = [];
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text.charAt(index);
+    if (char === "\\") {
+      index += 1;
+    } else if (char === "[") {
+      brackets.push(index);
+    } else if (char === "]") {
+      const opener = brackets.pop();
+      if (opener === undefined) {
+        continue;
+      }
+      labelEnds.set(opener, index);
+      const destinationEnd =
+        text.charAt(index + 1) === "("
+          ? findDestinationEnd(text, index + 1, parenClosers)
+          : undefined;
+      if (destinationEnd !== undefined) {
+        destinationEnds.set(index, destinationEnd);
+        index = destinationEnd;
+      }
+    }
+  }
+  return { labelEnds, destinationEnds };
+}
+
 /** Replaces `[label](destination)` and `![label](destination)` with the label, nested labels included. */
 function stripInlineLinks(text: string): string {
-  const closers = matchDelimiters(text);
+  const { labelEnds, destinationEnds } = matchLinks(text);
   const suffixEnds = new Map<number, number>();
   let output = "";
   let cursor = 0;
@@ -118,11 +150,8 @@ function stripInlineLinks(text: string): string {
       index = suffixEnd - 1;
       continue;
     }
-    const labelEnd = text[index] === "[" ? closers.get(index) : undefined;
-    const destinationEnd =
-      labelEnd !== undefined && text[labelEnd + 1] === "("
-        ? findDestinationEnd(text, labelEnd + 1, closers)
-        : undefined;
+    const labelEnd = text[index] === "[" ? labelEnds.get(index) : undefined;
+    const destinationEnd = labelEnd === undefined ? undefined : destinationEnds.get(labelEnd);
     if (labelEnd === undefined || destinationEnd === undefined) {
       continue;
     }
