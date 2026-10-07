@@ -1392,15 +1392,9 @@ describe("runMemoryFlushIfNeeded", () => {
     },
   );
 
-  it("warns with the compaction target and failover class when preflight compaction fails", async () => {
+  it("warns with the compaction model and failover class when preflight compaction fails", async () => {
     const reason = "Turn prefix summarization failed: 429 quota exceeded PROMPT_SENTINEL";
-    compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
-      ok: false,
-      compacted: false,
-      reason,
-      attemptedModel: { provider: "openai", model: "gpt-5-nano" },
-      failure: { reason: "rate_limit", status: 429 },
-    });
+    compactEmbeddedAgentSessionMock.mockResolvedValueOnce({ ok: false, compacted: false, reason });
     const sessionEntry: SessionEntry = createFlushSessionEntry({
       totalTokens: 180_499,
       compactionCount: 0,
@@ -1408,6 +1402,7 @@ describe("runMemoryFlushIfNeeded", () => {
 
     await expect(
       runDefaultPreflight(sessionEntry, {
+        cfg: compactionConfig({ memoryFlush: {}, model: "openai/gpt-5-nano" }),
         modelContextTokens: 200_000,
         sessionStore: { main: sessionEntry },
         sessionKey: "main",

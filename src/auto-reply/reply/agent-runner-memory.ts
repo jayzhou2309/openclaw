@@ -14,10 +14,12 @@ import {
   classifyCompactionReason,
   isBenignCompactionSkipResult,
 } from "../../agents/embedded-agent-runner/compact-reasons.js";
+import { resolveEmbeddedCompactionTarget } from "../../agents/embedded-agent-runner/compaction-runtime-context.js";
 import type { AcceptedCompactionSuccessor } from "../../agents/embedded-agent-runner/compaction-successor.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import { createDeferredEmbeddedRunLifecycleManager } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import { createToolResultPromptProjectionState } from "../../agents/embedded-agent-runner/session-prompt-state.js";
+import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import { isCliRuntimeAliasForProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
@@ -805,14 +807,21 @@ export async function runSessionCompactionIfNeeded(params: {
         return entry;
       }
       await notifyTerminalCompaction("incomplete");
-      const attemptedModel = result?.attemptedModel;
+      const summaryTarget = resolveEmbeddedCompactionTarget({
+        config: params.cfg,
+        provider: params.followupRun.run.provider,
+        modelId: params.followupRun.run.model,
+        modelSelectionLocked: entry.modelSelectionLocked === true,
+      });
       preflightCompactionLog.warn("preflight compaction failed", {
         stage: "preflight",
         sessionKey: params.sessionKey,
-        ...(attemptedModel
-          ? { provider: attemptedModel.provider, model: attemptedModel.model }
-          : {}),
-        reasonClass: result?.failure?.reason ?? classifyCompactionReason(reason),
+        provider: summaryTarget.provider,
+        model: summaryTarget.model,
+        reasonClass:
+          result?.failure?.reason ??
+          resolveFailoverReasonFromError(new Error(reason)) ??
+          classifyCompactionReason(reason),
       });
       throw new Error(`Preflight compaction required but failed: ${reason}`);
     }

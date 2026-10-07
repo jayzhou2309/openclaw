@@ -307,8 +307,6 @@ export type EmbeddedAgentCompactResult = {
     code?: string;
     rawError?: string;
   };
-  /** Compaction target of the failed attempt, after compaction model overrides and fallbacks. */
-  attemptedModel?: { provider: string; model: string };
   result?: {
     /** Identifies summaryless provider compaction in RPC and UI consumers. */
     kind?: "server-endpoint";
