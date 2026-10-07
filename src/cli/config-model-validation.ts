@@ -2,12 +2,12 @@ import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion"
 import {
   hasAgentRosterProperty,
   resolveAgentModelConfigForRuntime,
+  resolveAgentNativeModelPrimary,
 } from "../agents/agent-scope-config.js";
 import {
   listAgentEntries,
   listAgentEntriesWithSource,
   resolveAgentDir,
-  resolveAgentExplicitModelPrimary,
   resolveAgentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
@@ -139,7 +139,7 @@ function inheritsDefaultModelRef(
 ): boolean {
   const resolveOverride = ref.fallback
     ? resolveAgentModelFallbacksOverride
-    : resolveAgentExplicitModelPrimary;
+    : resolveAgentNativeModelPrimary;
   return resolveOverride(config, agentId) === undefined;
 }
 
@@ -500,6 +500,7 @@ export async function checkTouchedTextModelRefs(params: {
           ((path[1] === "entries" || path[1] === "list") &&
             (path.length <= 3 ||
               path[3] === "models" ||
+              path[3] === "runtime" ||
               (path[3] === "model" && (path.length === 4 || path[4] === "primary")))))),
   );
   if (!modelDependenciesTouched && !touchedPaths.some(pathMayAffectTextModelRefs)) {
