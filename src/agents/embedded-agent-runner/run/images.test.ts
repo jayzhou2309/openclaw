@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
+import { createNoisyPngBuffer } from "../../../../test/helpers/image-fixtures.js";
 import { buildInboundMediaNoteProjection } from "../../../auto-reply/media-note.js";
 import { resolvePreferredOpenClawTmpDir } from "../../../infra/tmp-openclaw-dir.js";
 import {
@@ -523,6 +524,28 @@ describe("detectAndLoadPromptImages", () => {
       expect(result.failedMediaCount).toBe(1);
       expect(result.skippedCount).toBe(1);
       expect(result.images).toHaveLength(0);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("drops a header-valid truncated image and keeps a complete one", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-truncated-image-"));
+    const png = createNoisyPngBuffer(64, 64);
+    const truncatedPath = path.join(workspaceDir, "truncated.png");
+    const validPath = path.join(workspaceDir, "valid.png");
+    await fs.writeFile(truncatedPath, png.subarray(0, Math.floor(png.length / 2)));
+    await fs.writeFile(validPath, png);
+
+    try {
+      const result = await detectAndLoadPromptImages({
+        prompt: `Inspect ${truncatedPath} and ${validPath}`,
+        workspaceDir,
+        model: { input: ["text", "image"] },
+        workspaceOnly: true,
+      });
+
+      expect(result.images.map((image) => image.data)).toEqual([png.toString("base64")]);
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }

@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
+import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
 import {
   sanitizeGoogleTurnOrdering,
   sanitizeSessionMessagesImages,
@@ -153,6 +154,40 @@ describe("sanitizeSessionMessagesImages", () => {
     expect(
       await sanitizeSessionMessagesImages(input, "test", { preserveSignatures: true }),
     ).toEqual([{ role: "assistant", content: [first, text("visible"), redacted, text("tail")] }]);
+  });
+  it("omits header-valid truncated images the provider has not accepted yet", async () => {
+    const png = createNoisyPngBuffer(64, 64);
+    const truncated = png.subarray(0, Math.floor(png.length / 2)).toString("base64");
+    const valid = png.toString("base64");
+    const image = (data: string) => ({ type: "image" as const, data, mimeType: "image/png" });
+    const omitted = {
+      type: "text",
+      text: expect.stringMatching(/^\[session:history\] omitted image payload: .*decode/i),
+    };
+    const input = castAgentMessages([
+      { role: "user", content: [image(truncated)], timestamp: 1 },
+      assistant([text("accepted")]),
+      { role: "user", content: [image(truncated), image(valid)], timestamp: 2 },
+      assistant([text("rejected")], { stopReason: "error" }),
+      {
+        role: "toolResult",
+        toolCallId: "t1",
+        toolName: "read",
+        content: [image(truncated)],
+        isError: false,
+        timestamp: 3,
+      },
+    ]);
+
+    const out = await sanitizeSessionMessagesImages(input, "session:history");
+
+    expect(out.map((message) => (message as { content: unknown }).content)).toEqual([
+      [image(truncated)],
+      [text("accepted")],
+      [omitted, image(valid)],
+      [text("rejected")],
+      [omitted],
+    ]);
   });
 });
 
