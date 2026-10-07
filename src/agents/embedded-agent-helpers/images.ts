@@ -66,7 +66,8 @@ export async function sanitizeSessionMessagesImages(
   // The provider already accepted every image before its last successful reply.
   // Only later images can still poison the next request, so only they pay a full decode.
   const lastAcceptedReplyIndex = sanitizedIds.findLastIndex(
-    (msg) => msg?.role === "assistant" && msg.stopReason !== "error",
+    (msg) =>
+      msg?.role === "assistant" && msg.stopReason !== "error" && msg.stopReason !== "aborted",
   );
   const verifiedImageSanitization = { ...imageSanitization, verifyDecodability: true };
   const out: AgentMessage[] = [];

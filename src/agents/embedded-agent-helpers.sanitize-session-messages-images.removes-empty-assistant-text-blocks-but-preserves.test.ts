@@ -189,6 +189,28 @@ describe("sanitizeSessionMessagesImages", () => {
       [omitted],
     ]);
   });
+  it("does not treat an aborted reply as provider acceptance of earlier images", async () => {
+    const png = createNoisyPngBuffer(64, 64);
+    const truncated = png.subarray(0, Math.floor(png.length / 2)).toString("base64");
+    const input = castAgentMessages([
+      {
+        role: "user",
+        content: [{ type: "image", data: truncated, mimeType: "image/png" }],
+        timestamp: 1,
+      },
+      assistant([], { stopReason: "aborted" }),
+      { role: "user", content: [text("still there?")], timestamp: 2 },
+    ]);
+
+    const out = await sanitizeSessionMessagesImages(input, "session:history");
+
+    expect((out[0] as { content: unknown }).content).toEqual([
+      {
+        type: "text",
+        text: expect.stringMatching(/^\[session:history\] omitted image payload: .*decode/i),
+      },
+    ]);
+  });
 });
 
 describe("sanitizeGoogleTurnOrdering", () => {
