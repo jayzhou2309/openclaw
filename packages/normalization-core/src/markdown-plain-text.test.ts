@@ -45,6 +45,16 @@ describe("flattenMarkdownToPlainText", () => {
       "See docs now",
     ],
     [
+      "linked images whose destination holds a bracket",
+      "Badge [![build](https://example.com/badge[.svg)](https://ci.example.com) ok",
+      "Badge build ok",
+    ],
+    [
+      "linked images whose title holds a bracket",
+      'Badge [![build](https://example.com/badge.svg "Build [main")](https://ci.example.com) ok',
+      "Badge build ok",
+    ],
+    [
       "unclosed link destinations",
       "Keep [this](https://example.com/open( text",
       "Keep [this](https://example.com/open( text",
