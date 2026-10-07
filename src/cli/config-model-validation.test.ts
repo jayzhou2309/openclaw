@@ -207,6 +207,38 @@ describe("config model validation", () => {
     ]);
   });
 
+  it("leaves ACP harness primaries to the harness and validates their native fallbacks", async () => {
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: {
+          entries: {
+            main: {},
+            qursor: {
+              runtime: { type: "acp", acp: { agent: "qursor", backend: "acpx" } },
+              model: { primary: "composer-2.5", fallbacks: ["openai/gpt-5.4-mini"] },
+            },
+            opencode: { runtime: { type: "acp" }, model: "opencode/muse-spark-1.3" },
+          },
+        },
+      },
+      touchedPaths: [
+        ["agents", "entries", "qursor", "model"],
+        ["agents", "entries", "opencode", "model"],
+      ],
+      resolveModelRef,
+    });
+
+    expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+    expect(resolveModelRef.mock.calls.map(([call]) => call.ref)).toEqual([
+      {
+        path: "agents.entries.qursor.model.fallbacks.0",
+        value: "openai/gpt-5.4-mini",
+        agentId: "qursor",
+        fallback: true,
+      },
+    ]);
+  });
+
   it("uses list index paths for list-shaped agent model refs", async () => {
     const config: OpenClawConfigWithLegacyRoster = {
       agents: {
