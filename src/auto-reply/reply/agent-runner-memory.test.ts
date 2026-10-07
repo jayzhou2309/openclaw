@@ -83,6 +83,7 @@ const {
   incrementCompactionCountMock,
   registerAgentRunContextMock,
   clearAgentRunContextMock,
+  preflightCompactionWarnMock,
 } = vi.hoisted(() => ({
   compactEmbeddedAgentSessionMock: vi.fn(),
   runEmbeddedAgentEntryMock: vi.fn(),
@@ -91,10 +92,23 @@ const {
   incrementCompactionCountMock: vi.fn(),
   registerAgentRunContextMock: vi.fn(),
   clearAgentRunContextMock: vi.fn(),
+  preflightCompactionWarnMock: vi.fn(),
 }));
 const runWithModelFallbackMock = vi.fn();
 const ensureSelectedAgentHarnessPluginMock = vi.fn();
 
+vi.mock("../../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (...args: Parameters<typeof actual.createSubsystemLogger>) => {
+      const logger = actual.createSubsystemLogger(...args);
+      return args[0] === "auto-reply/preflight-compaction"
+        ? { ...logger, warn: preflightCompactionWarnMock }
+        : logger;
+    },
+  };
+});
 vi.mock("../../agents/embedded-agent-runner/run-entry.js", () => ({
   runEmbeddedAgentEntry: runEmbeddedAgentEntryMock,
 }));
@@ -1327,9 +1341,12 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactEmbeddedAgentSessionMock).toHaveBeenCalled();
   });
 
-  it.each(["plugin already stored this turn", "deferred to background context-engine maintenance"])(
+  it.each([
+    ["plugin already stored this turn", "unknown"],
+    ["deferred to background context-engine maintenance", "deferred_background"],
+  ])(
     "fails required preflight compaction for a successful no-op: %s",
-    async (reason) => {
+    async (reason, reasonClass) => {
       compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
         ok: true,
         compacted: false,
@@ -1351,6 +1368,14 @@ describe("runMemoryFlushIfNeeded", () => {
         }),
       ).rejects.toThrow(`Preflight compaction required but failed: ${reason}`);
 
+      expect(preflightCompactionWarnMock).toHaveBeenCalledWith(
+        "preflight compaction failed",
+        expect.objectContaining({
+          stage: "preflight",
+          sessionKey: "main",
+          reasonClass,
+        }),
+      );
       expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
       const compactCall = requireCompactEmbeddedAgentSessionCall();
       expect(compactCall.contextTokenBudget).toBe(200_000);
