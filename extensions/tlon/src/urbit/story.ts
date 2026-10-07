@@ -38,21 +38,26 @@ type StoryVerse = { block: StoryBlock } | { inline: StoryInline[] };
 
 export type Story = StoryVerse[];
 
+type InlineMatch = { readonly 0: string; readonly [index: number]: string | undefined };
+
 // In running prose a bare URL never ends in sentence punctuation or a stray paren. A closing
-// paren ends the URL only when it balances one inside it, as in .../wiki/Function_(mathematics),
-// with groups nested up to two deep.
-const URL_CHAR = String.raw`[^\s<>"\]()]`;
-const URL_END_CHAR = String.raw`[^\s<>"\]().,;:!?]`;
-const URL_PAREN_GROUP = String.raw`\((?:${URL_CHAR}|\(${URL_CHAR}*\))*\)`;
-const URL_OPEN_PAREN = String.raw`\((?!${URL_CHAR}*\))(?=${URL_END_CHAR})`;
-const URL_UNIT = `${URL_END_CHAR}|${URL_PAREN_GROUP}|${URL_OPEN_PAREN}`;
-const BARE_URL_PATTERN = new RegExp(
-  String.raw`^(https?:\/\/(?:${URL_UNIT}|[.,;:!?)]+(?=${URL_UNIT}))+)`,
-);
+// paren ends the URL only when it balances one inside it, as in .../wiki/Function_(mathematics).
+function matchBareUrl(text: string): InlineMatch | null {
+  let url = /^https?:\/\/[^\s<>"\]]+/.exec(text)?.[0];
+  if (!url) {
+    return null;
+  }
+  let unbalanced = url.split(")").length - url.split("(").length;
+  while (/[.,;:!?(]$/.test(url) || (url.endsWith(")") && unbalanced > 0)) {
+    unbalanced += url.endsWith(")") ? -1 : url.endsWith("(") ? 1 : 0;
+    url = url.slice(0, -1);
+  }
+  return /^https?:\/\/./.test(url) ? [url, url] : null;
+}
 
 const INLINE_MARKDOWN_RULES: ReadonlyArray<{
-  pattern: RegExp;
-  render: (match: RegExpMatchArray) => StoryInline;
+  pattern: RegExp | ((text: string) => InlineMatch | null);
+  render: (match: InlineMatch) => StoryInline;
 }> = [
   {
     pattern: /^(~[a-z][-a-z0-9]*)/,
@@ -99,7 +104,7 @@ const INLINE_MARKDOWN_RULES: ReadonlyArray<{
     }),
   },
   {
-    pattern: BARE_URL_PATTERN,
+    pattern: matchBareUrl,
     render: (match) => {
       const url = expectDefined(match[1], "plain URL capture");
       return { link: { href: url, content: url } };
@@ -119,7 +124,10 @@ function parseInlineMarkdown(text: string): StoryInline[] {
     let consumed = 1;
     let inline: StoryInline = remaining.charAt(0);
     for (const rule of INLINE_MARKDOWN_RULES) {
-      const match = remaining.match(rule.pattern);
+      const match =
+        typeof rule.pattern === "function"
+          ? rule.pattern(remaining)
+          : remaining.match(rule.pattern);
       if (match) {
         inline = rule.render(match);
         consumed = match[0].length;

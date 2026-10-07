@@ -143,6 +143,21 @@ describe("markdownToStory inline formatting", () => {
     ]);
   });
 
+  it("keeps balanced parentheses nested at any depth inside a bare URL", () => {
+    const url = "https://example.com/a(b(c(d)e)f)";
+    const link = { link: { href: url, content: url } };
+    expect(markdownToStory(`${url} and see ${url}. Or (${url})!`)).toEqual([
+      { inline: [link, " and see ", link, ". Or (", link, ")!"] },
+    ]);
+  });
+
+  it("trims an unbalanced closing paren after a bare URL", () => {
+    const link = { link: { href: "https://example.com/a", content: "https://example.com/a" } };
+    expect(markdownToStory("(see https://example.com/a)")).toEqual([
+      { inline: ["(see ", link, ")"] },
+    ]);
+  });
+
   it("keeps punctuation before a stray paren out of a bare URL", () => {
     const link = { link: { href: "https://example.com/a", content: "https://example.com/a" } };
     expect(markdownToStory("see https://example.com/a:( sad")).toEqual([
