@@ -168,6 +168,7 @@ describe("CLI execution cancellation", () => {
             type: "assistant",
             message: {
               role: "assistant",
+              stop_reason: null,
               content: [
                 {
                   type: "text",
