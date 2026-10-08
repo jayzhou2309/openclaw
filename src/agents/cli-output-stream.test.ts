@@ -264,13 +264,18 @@ describe("createCliJsonlStreamingParser", () => {
       text: 'Example:\n```xml\n<invoke name="Bash">\n<parameter name="command">echo 1',
       rejected: false,
     },
+    {
+      name: "first-line indented example",
+      text: '    <invoke name="Bash">\n    <parameter name="command">echo 1',
+      rejected: false,
+    },
   ])("retains only usable interrupted $name without synthetic callbacks", ({ text, rejected }) => {
     const parseJsonlEvent = vi.fn(() => null);
     const parser = createClaudeParser({ parseJsonlEvent });
     const frame = claudeTextDelta(text);
     finishFrames(parser, frame);
     expect(parser.hasTerminalResult()).toBe(false);
-    expect(parser.getOutput()).toMatchObject({ text: rejected ? "" : text });
+    expect(parser.getOutput()).toMatchObject({ text: rejected ? "" : text.trim() });
     expect(parser.getOutput()?.errorText).toEqual(rejected ? expect.any(String) : undefined);
     expect(parseJsonlEvent).toHaveBeenCalledOnce();
     expect(parseJsonlEvent).toHaveBeenCalledWith(

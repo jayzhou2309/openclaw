@@ -686,14 +686,11 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       if (rawLines === 0) {
         return null;
       }
-      const text = (
-        sawCustomJsonlEvent
-          ? texts.join("\n").trim() || assistantText
-          : supportsCliJsonlToolEvents(params)
-            ? assistantText
-            : texts.join("\n")
-      ).trim();
-      const partialOutput = { text, sessionId, usage };
+      let text = texts.join("\n");
+      if (sawCustomJsonlEvent ? !text.trim() : supportsCliJsonlToolEvents(params)) {
+        text = assistantText;
+      }
+      const partialOutput = { text: text.trim(), sessionId, usage };
       // An unfinished stream cannot disambiguate raw protocol from a completed example.
       if (claudeStreamJson) {
         const codeRegions = findCodeRegions(text);
@@ -707,7 +704,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
           }
         }
       }
-      if (sawCustomJsonlEvent || text) {
+      if (sawCustomJsonlEvent || partialOutput.text) {
         return {
           ...partialOutput,
           ...(!sawCustomJsonlEvent && resumeCheckpointId ? { resumeCheckpointId } : {}),
