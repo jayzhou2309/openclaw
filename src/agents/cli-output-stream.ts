@@ -670,7 +670,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     hasTerminalResult() {
       return sawTerminalResult;
     },
-    getOutput(): CliOutput | null {
+    getOutput(): (CliOutput & { partialOutputRejected?: true }) | null {
       if (parseErrorText) {
         return {
           text: "",
@@ -700,6 +700,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
               ...partialOutput,
               text: "",
               errorText: "Claude CLI interrupted during raw tool protocol.",
+              partialOutputRejected: true,
             };
           }
         }
