@@ -670,7 +670,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     hasTerminalResult() {
       return sawTerminalResult;
     },
-    getOutput() {
+    getOutput(): CliOutput | null {
       if (parseErrorText) {
         return {
           text: "",
