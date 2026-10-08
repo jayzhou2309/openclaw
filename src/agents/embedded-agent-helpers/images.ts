@@ -53,26 +53,18 @@ export async function sanitizeSessionMessagesImages(
   const imageSanitization = {
     maxDimensionPx: options?.maxDimensionPx,
     maxBytes: options?.maxBytes,
+    // Replay does not rewrite stored images, even after a successful reply.
+    verifyDecodability: true,
   };
-  const shouldSanitizeToolCallIds = options?.sanitizeToolCallIds === true;
-  // We sanitize historical session messages because Anthropic can reject a request
-  // if the transcript contains oversized base64 images (default max side 1200px).
-  const sanitizedIds = shouldSanitizeToolCallIds
-    ? sanitizeToolCallIdsForCloudCodeAssist(messages, options.toolCallIdMode, {
-        preserveNativeAnthropicToolUseIds: options?.preserveNativeAnthropicToolUseIds,
-        duplicateToolCallIdStyle: options?.duplicateToolCallIdStyle,
-      })
-    : messages;
-  // The provider already accepted every image before its last successful reply.
-  // Only later images can still poison the next request, so only they pay a full decode.
-  const lastAcceptedReplyIndex = sanitizedIds.findLastIndex(
-    (msg) =>
-      msg?.role === "assistant" && msg.stopReason !== "error" && msg.stopReason !== "aborted",
-  );
-  const verifiedImageSanitization = { ...imageSanitization, verifyDecodability: true };
+  const sanitizedIds =
+    options?.sanitizeToolCallIds === true
+      ? sanitizeToolCallIdsForCloudCodeAssist(messages, options.toolCallIdMode, {
+          preserveNativeAnthropicToolUseIds: options?.preserveNativeAnthropicToolUseIds,
+          duplicateToolCallIdStyle: options?.duplicateToolCallIdStyle,
+        })
+      : messages;
   const out: AgentMessage[] = [];
-  for (const [index, msg] of sanitizedIds.entries()) {
-    const limits = index > lastAcceptedReplyIndex ? verifiedImageSanitization : imageSanitization;
+  for (const msg of sanitizedIds) {
     if (!msg || typeof msg !== "object") {
       out.push(msg);
       continue;
@@ -86,7 +78,7 @@ export async function sanitizeSessionMessagesImages(
         const nextContent = await sanitizeContentBlocksImages(
           Array.isArray(content) ? content : [],
           label,
-          limits,
+          imageSanitization,
         );
         out.push({
           ...contentMsg,
@@ -107,7 +99,7 @@ export async function sanitizeSessionMessagesImages(
         const finalContent = (await sanitizeContentBlocksImages(
           dropEmptyTextBlocks(strippedContent) as unknown as ContentBlock[],
           label,
-          limits,
+          imageSanitization,
         )) as unknown as typeof assistantMsg.content;
         if (finalContent.length > 0 || assistantMsg.providerReplay) {
           out.push(replaceCompactionReplayOwnerContent(assistantMsg, finalContent));
