@@ -23,6 +23,7 @@ import {
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { settleReplyPendingFinalDelivery } from "./dispatch-from-config.pending-final.js";
 import { registerDispatcher } from "./dispatcher-registry.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import {
   normalizeReplyPayloadOutcome,
   type NormalizeReplyOutcome,
@@ -219,10 +220,8 @@ export type ReplyDispatcherWithTypingOptions = Omit<ReplyDispatcherOptions, "onI
 
 type ReplyDispatcherWithTypingResult = {
   dispatcher: ReturnType<typeof createReplyDispatcher>;
-  replyOptions: Pick<
-    GetReplyOptions,
-    "onReplyStart" | "onTypingController" | "onTypingCleanup" | "onTypingHandoff"
-  >;
+  replyOptions: Pick<GetReplyOptions, "onReplyStart" | "onTypingController" | "onTypingCleanup"> &
+    Pick<InternalGetReplyOptions, "onTypingHandoff">;
   markDispatchIdle: () => void;
   /** Signal that the model run is complete so the typing controller can stop. */
   markRunComplete: () => void;
