@@ -1,12 +1,27 @@
 import { DuplicateAgentError } from "../agents/agent-create-error.js";
+import { AuthProfileStoreUnreadableError } from "../agents/auth-profiles/store-unreadable-error.js";
 import { McpOAuthStoreCorruptionError } from "../agents/mcp-oauth-store-error.js";
 import { WorkspaceAliasRepointedError } from "../agents/workspace-state-identity.js";
 import {
-  SESSION_GOAL_OPERATION_ERROR_CODES,
-  SessionGoalOperationError,
-  type SessionGoalOperationErrorCode,
-} from "../config/sessions/goals-operations.types.js";
+  SessionWorktreeLifecycleError,
+  SessionWorktreeSourceChangedError,
+  WorktreeRemovalContentionError,
+  WorktreeRemovalLockError,
+} from "../agents/worktrees/errors.js";
+import { SessionGoalOperationError } from "../config/sessions/goals-operations.types.js";
+import { SessionCanonicalKeyMigrationRequiredError } from "../config/sessions/session-canonical-key-error.js";
+import {
+  SessionEntryLifecycleUpsertConflictError,
+  SqliteSessionMutationConflictError,
+  SqliteTranscriptMutationConflictError,
+} from "../config/sessions/session-mutation-conflict-error.js";
 import { SessionPendingInputCustodyError } from "../config/sessions/session-pending-input-custody-error.js";
+import { SessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence-error.js";
+import {
+  parseTranscriptAppendRefusal,
+  SessionTranscriptWriterClaimReboundError,
+} from "../config/sessions/session-transcript-writer-claim-error.js";
+import { ModelAccountConnectAuthorityError } from "../gateway/model-account-connect-errors.js";
 import { WorkerSessionAlreadyAttachedError } from "../gateway/worker-environments/session-attachment.js";
 import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
 import {
@@ -16,34 +31,26 @@ import {
   OpenClawStateOwnershipMetadataError,
 } from "../infra/sqlite-lifecycle-errors.js";
 import { SqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
-import {
-  isStartupMaintenanceKind,
-  StartupMaintenanceRequiredError,
-} from "../infra/startup-maintenance-required.js";
+import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { PluginBlobStoreError } from "../plugin-state/plugin-blob-store.types.js";
-import {
-  SecretStoreValidationError,
-  isSecretStoreValidationCode,
-} from "../secrets/store/secret-store-validation-error.js";
-import { SkillLibraryError, type SkillLibraryErrorCode } from "../skills/library/errors.js";
+import { PluginStateStoreError } from "../plugin-state/plugin-state-error.js";
+import { SecretStoreValidationError } from "../secrets/store/secret-store-validation-error.js";
+import { ModelSelectionLockedError } from "../sessions/model-selection-error.js";
 import { SkillUploadRequestError } from "../skills/lifecycle/upload-store-error.js";
+import { SkillLibraryError } from "../skills/skill-library-error.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
-import {
-  isOpenClawStateLeaseErrorCode,
-  OpenClawStateLeaseError,
-  type OpenClawStateLeaseErrorCode,
-} from "./openclaw-state-lease-error.js";
+import { OpenClawStateLeaseError } from "./openclaw-state-lease-error.js";
 import { SessionMetadataUnavailableError } from "./session-metadata-unavailable-error.js";
 
-type MaintenanceKind = ConstructorParameters<typeof StartupMaintenanceRequiredError>[0];
-type StateMigrationKind = ConstructorParameters<
-  typeof OpenClawStateDatabaseSchemaMigrationRequiredError
->[0];
-
 const MESSAGE_ONLY_ERRORS = {
+  "worktree-source-changed": SessionWorktreeSourceChangedError,
+  "model-account-authority": ModelAccountConnectAuthorityError,
   "duplicate-agent": DuplicateAgentError,
+  "model-selection-locked": ModelSelectionLockedError,
+  "session-canonical-key-migration": SessionCanonicalKeyMigrationRequiredError,
   "session-pending-input-custody": SessionPendingInputCustodyError,
+  "session-transcript-read-fence": SessionTranscriptReadFenceError,
   "skill-upload-request": SkillUploadRequestError,
   coordinator: SqliteCoordinatorError,
   ownership: OpenClawStateOwnershipError,
@@ -59,59 +66,61 @@ function isMessageOnlyErrorIdentity(node: { type?: unknown }): node is MessageOn
   return typeof node.type === "string" && Object.hasOwn(MESSAGE_ONLY_ERRORS, node.type);
 }
 
-export type ErrorIdentity =
-  | { type: "secret-store-validation"; secretCode: SecretStoreValidationError["code"] }
-  | MessageOnlyErrorIdentity
-  | { type: "session-goal-operation"; goalCode: SessionGoalOperationErrorCode }
-  | { type: "worker-session-already-attached"; sessionId: string; environmentId: string }
-  | {
-      type: "workspace-alias-repointed";
-      aliasPath: string;
-      storedWorkspacePath: string;
-      currentWorkspacePath: string;
-    }
-  | { type: "error" | "aggregate" | "mcp-oauth-corruption" }
-  | { type: "state-owner-contention"; databasePath: string }
-  | { type: "ownership-metadata"; databasePath: string }
-  | { type: "external-ownership"; databasePath: string; managerId: string }
-  | { type: "state-lease"; leaseCode: OpenClawStateLeaseErrorCode }
-  | { type: "skill-library"; libraryCode: SkillLibraryErrorCode; currentRevision?: string }
-  | {
-      type: "plugin-blob";
-      blobCode: PluginBlobStoreError["code"];
-      operation: PluginBlobStoreError["operation"];
-      path?: string;
-    }
-  | { type: "maintenance"; kind: MaintenanceKind }
-  | { type: "state-migration"; kind: StateMigrationKind; pathname: string }
-  | {
-      type: "session-metadata";
-      reason: SessionMetadataUnavailableError["reason"];
-      missingTables: readonly string[];
-    }
-  | { type: "agent-media-migration"; pathname: string; schemaVersion: number };
+export type ErrorIdentity = ReturnType<typeof identifyError>;
 
-export function identifyError(error: Error): ErrorIdentity {
+export function identifyError(error: Error) {
+  if (error instanceof AuthProfileStoreUnreadableError) {
+    return { type: "auth-profile-store-unreadable" as const, databasePath: error.databasePath };
+  }
+  if (error instanceof SessionWorktreeLifecycleError && error.reason === "owner-mismatch") {
+    return { type: "session-worktree-owner-mismatch" as const };
+  }
+  if (error instanceof WorktreeRemovalContentionError) {
+    return {
+      type: "worktree-removal-contention" as const,
+      kind: error.kind,
+      ...(error.blockedByRun
+        ? {
+            blockedByRun: {
+              worktreeId: error.blockedByRun.worktreeId,
+              pid: error.blockedByRun.pid,
+            },
+          }
+        : {}),
+    };
+  }
+  if (error instanceof WorktreeRemovalLockError) {
+    return { type: "worktree-removal-lock" as const, kind: error.kind };
+  }
+  if (error instanceof PluginStateStoreError) {
+    return {
+      type: "plugin-state" as const,
+      stateCode: error.code,
+      operation: error.operation,
+      path: error.path,
+      owner: { pid: error.owner.pid, threadId: error.owner.threadId, version: error.owner.version },
+    };
+  }
   if (error instanceof SkillLibraryError) {
     return {
-      type: "skill-library",
+      type: "skill-library" as const,
       libraryCode: error.code,
       ...(error.currentRevision === undefined ? {} : { currentRevision: error.currentRevision }),
     };
   }
   if (error instanceof SecretStoreValidationError) {
-    return { type: "secret-store-validation", secretCode: error.code };
+    return { type: "secret-store-validation" as const, secretCode: error.code };
   }
   if (error instanceof WorkerSessionAlreadyAttachedError) {
     return {
-      type: "worker-session-already-attached",
+      type: "worker-session-already-attached" as const,
       sessionId: error.sessionId,
       environmentId: error.environmentId,
     };
   }
   if (error instanceof PluginBlobStoreError) {
     return {
-      type: "plugin-blob",
+      type: "plugin-blob" as const,
       blobCode: error.code,
       operation: error.operation,
       ...(error.path === undefined ? {} : { path: error.path }),
@@ -119,47 +128,63 @@ export function identifyError(error: Error): ErrorIdentity {
   }
   if (error instanceof WorkspaceAliasRepointedError) {
     return {
-      type: "workspace-alias-repointed",
+      type: "workspace-alias-repointed" as const,
       aliasPath: error.aliasPath,
       storedWorkspacePath: error.storedWorkspacePath,
       currentWorkspacePath: error.currentWorkspacePath,
     };
   }
   if (error instanceof McpOAuthStoreCorruptionError) {
-    return { type: "mcp-oauth-corruption" };
+    return { type: "mcp-oauth-corruption" as const };
   }
   if (error instanceof SessionGoalOperationError) {
-    return { type: "session-goal-operation", goalCode: error.code };
+    return { type: "session-goal-operation" as const, goalCode: error.code };
+  }
+  if (error instanceof SessionEntryLifecycleUpsertConflictError) {
+    return { type: "session-lifecycle-upsert-conflict" as const, sessionKey: error.sessionKey };
+  }
+  if (error instanceof SessionTranscriptWriterClaimReboundError) {
+    const refusal = parseTranscriptAppendRefusal(error.cause);
+    return {
+      type: "session-transcript-writer-claim-rebound" as const,
+      ...(refusal ? { refusal } : {}),
+    };
+  }
+  if (error instanceof SqliteSessionMutationConflictError) {
+    return { type: "session-mutation-conflict" as const, operationLabel: error.operationLabel };
+  }
+  if (error instanceof SqliteTranscriptMutationConflictError) {
+    return { type: "session-transcript-mutation-conflict" as const, sessionId: error.sessionId };
   }
   if (error instanceof SessionMetadataUnavailableError) {
     return {
-      type: "session-metadata",
+      type: "session-metadata" as const,
       reason: error.reason,
       missingTables: [...error.missingTables],
     };
   }
   if (error instanceof GatewayStateOwnerContentionError) {
-    return { type: "state-owner-contention", databasePath: error.databasePath };
+    return { type: "state-owner-contention" as const, databasePath: error.databasePath };
   }
   if (error instanceof OpenClawStateLeaseError) {
-    return { type: "state-lease", leaseCode: error.code };
+    return { type: "state-lease" as const, leaseCode: error.code };
   }
   if (error instanceof OpenClawStateOwnershipMetadataError) {
-    return { type: "ownership-metadata", databasePath: error.databasePath };
+    return { type: "ownership-metadata" as const, databasePath: error.databasePath };
   }
   if (error instanceof OpenClawStateExternalOwnershipError) {
     return {
-      type: "external-ownership",
+      type: "external-ownership" as const,
       databasePath: error.databasePath,
       managerId: error.managerId,
     };
   }
   if (error instanceof OpenClawStateDatabaseSchemaMigrationRequiredError) {
-    return { type: "state-migration", kind: error.kind, pathname: error.pathname };
+    return { type: "state-migration" as const, kind: error.kind, pathname: error.pathname };
   }
   if (error instanceof OpenClawAgentDatabaseMediaMigrationRequiredError) {
     return {
-      type: "agent-media-migration",
+      type: "agent-media-migration" as const,
       pathname: error.pathname,
       schemaVersion: error.schemaVersion,
     };
@@ -176,144 +201,10 @@ export function identifyError(error: Error): ErrorIdentity {
     }
   }
   if (error instanceof StartupMaintenanceRequiredError) {
-    return { type: "maintenance", kind: error.kind };
+    return { type: "maintenance" as const, kind: error.kind };
   }
-  return { type: error instanceof AggregateError ? "aggregate" : "error" };
+  return { type: error instanceof AggregateError ? ("aggregate" as const) : ("error" as const) };
 }
-
-function isBlobCode(value: unknown): value is PluginBlobStoreError["code"] {
-  return (
-    value === "PLUGIN_BLOB_OPEN_FAILED" ||
-    value === "PLUGIN_BLOB_WRITE_FAILED" ||
-    value === "PLUGIN_BLOB_READ_FAILED" ||
-    value === "PLUGIN_BLOB_CORRUPT" ||
-    value === "PLUGIN_BLOB_LIMIT_EXCEEDED" ||
-    value === "PLUGIN_BLOB_INVALID_INPUT"
-  );
-}
-
-function isBlobOperation(value: unknown): value is PluginBlobStoreError["operation"] {
-  return (
-    value === "open" ||
-    value === "register" ||
-    value === "lookup" ||
-    value === "delete" ||
-    value === "entries" ||
-    value === "clear" ||
-    value === "sweep"
-  );
-}
-
-function isSkillLibraryCode(value: unknown): value is SkillLibraryErrorCode {
-  return (
-    value === "IDENTITY_REQUIRED" ||
-    value === "FORBIDDEN" ||
-    value === "NOT_FOUND" ||
-    value === "CONFLICT" ||
-    value === "NAME_CONFLICT" ||
-    value === "INVALID_BUNDLE" ||
-    value === "POLICY_BLOCKED" ||
-    value === "AUTHORITY_EXPIRED" ||
-    value === "LIMIT"
-  );
-}
-
-export function parseIdentity(node: Record<string, unknown>): ErrorIdentity | undefined {
-  if (isMessageOnlyErrorIdentity(node)) {
-    return { type: node.type };
-  }
-  switch (node.type) {
-    case "skill-library":
-      return isSkillLibraryCode(node.libraryCode) &&
-        node.code === node.libraryCode &&
-        (node.currentRevision === undefined || typeof node.currentRevision === "string")
-        ? {
-            type: node.type,
-            libraryCode: node.libraryCode,
-            ...(typeof node.currentRevision === "string"
-              ? { currentRevision: node.currentRevision }
-              : {}),
-          }
-        : undefined;
-    case "secret-store-validation":
-      return isSecretStoreValidationCode(node.secretCode) && node.code === node.secretCode
-        ? { type: node.type, secretCode: node.secretCode }
-        : undefined;
-    case "worker-session-already-attached":
-      return typeof node.sessionId === "string" && typeof node.environmentId === "string"
-        ? { type: node.type, sessionId: node.sessionId, environmentId: node.environmentId }
-        : undefined;
-    case "workspace-alias-repointed":
-      return typeof node.aliasPath === "string" &&
-        typeof node.storedWorkspacePath === "string" &&
-        typeof node.currentWorkspacePath === "string"
-        ? {
-            type: node.type,
-            aliasPath: node.aliasPath,
-            storedWorkspacePath: node.storedWorkspacePath,
-            currentWorkspacePath: node.currentWorkspacePath,
-          }
-        : undefined;
-    case "error":
-    case "aggregate":
-    case "mcp-oauth-corruption":
-      return { type: node.type };
-    case "session-goal-operation": {
-      const goalCode = SESSION_GOAL_OPERATION_ERROR_CODES.find((code) => code === node.goalCode);
-      return goalCode && node.code === goalCode ? { type: node.type, goalCode } : undefined;
-    }
-    case "session-metadata":
-      return (node.reason === "schema-missing" || node.reason === "table-missing") &&
-        Array.isArray(node.missingTables) &&
-        node.missingTables.every((table: unknown) => typeof table === "string")
-        ? { type: node.type, reason: node.reason, missingTables: [...node.missingTables] }
-        : undefined;
-    case "state-owner-contention":
-    case "ownership-metadata":
-      return typeof node.databasePath === "string"
-        ? { type: node.type, databasePath: node.databasePath }
-        : undefined;
-    case "external-ownership":
-      return typeof node.databasePath === "string" && typeof node.managerId === "string"
-        ? { type: node.type, databasePath: node.databasePath, managerId: node.managerId }
-        : undefined;
-    case "plugin-blob":
-      return isBlobCode(node.blobCode) &&
-        node.code === node.blobCode &&
-        isBlobOperation(node.operation) &&
-        (node.path === undefined || typeof node.path === "string")
-        ? {
-            type: node.type,
-            blobCode: node.blobCode,
-            operation: node.operation,
-            ...(typeof node.path === "string" ? { path: node.path } : {}),
-          }
-        : undefined;
-    case "state-lease":
-      return isOpenClawStateLeaseErrorCode(node.leaseCode) && node.code === node.leaseCode
-        ? { type: node.type, leaseCode: node.leaseCode }
-        : undefined;
-    case "maintenance":
-      return isStartupMaintenanceKind(node.kind) ? { type: node.type, kind: node.kind } : undefined;
-    case "state-migration":
-      return (node.kind === "audit-events-v2" ||
-        node.kind === "legacy-cron-run-logs" ||
-        node.kind === "legacy-workshop-review-index") &&
-        typeof node.pathname === "string"
-        ? { type: node.type, kind: node.kind, pathname: node.pathname }
-        : undefined;
-    case "agent-media-migration":
-      return typeof node.pathname === "string" &&
-        typeof node.schemaVersion === "number" &&
-        Number.isSafeInteger(node.schemaVersion) &&
-        node.schemaVersion >= 0
-        ? { type: node.type, pathname: node.pathname, schemaVersion: node.schemaVersion }
-        : undefined;
-    default:
-      return undefined;
-  }
-}
-
 function unreachableErrorNode(node: never): never {
   throw new Error(`Unexpected shared-state worker error node: ${String(node)}`);
 }
@@ -324,6 +215,19 @@ export function createError(node: ErrorIdentity & { message: string }): Error {
     return new ErrorType(node.message);
   }
   switch (node.type) {
+    case "session-worktree-owner-mismatch":
+      return new SessionWorktreeLifecycleError(node.message, "owner-mismatch");
+    case "worktree-removal-contention":
+      return new WorktreeRemovalContentionError(node.kind, node.message, node.blockedByRun);
+    case "worktree-removal-lock":
+      return new WorktreeRemovalLockError(node.kind, node.message);
+    case "plugin-state":
+      return new PluginStateStoreError(node.message, {
+        code: node.stateCode,
+        operation: node.operation,
+        path: node.path,
+        owner: node.owner,
+      });
     case "skill-library":
       return new SkillLibraryError(node.libraryCode, node.message, node.currentRevision);
     case "secret-store-validation":
@@ -334,6 +238,14 @@ export function createError(node: ErrorIdentity & { message: string }): Error {
       return new WorkspaceAliasRepointedError(node);
     case "session-goal-operation":
       return new SessionGoalOperationError(node.goalCode, node.message);
+    case "session-lifecycle-upsert-conflict":
+      return new SessionEntryLifecycleUpsertConflictError(node.sessionKey);
+    case "session-mutation-conflict":
+      return new SqliteSessionMutationConflictError(node.operationLabel);
+    case "session-transcript-mutation-conflict":
+      return new SqliteTranscriptMutationConflictError(node.sessionId);
+    case "session-transcript-writer-claim-rebound":
+      return new SessionTranscriptWriterClaimReboundError(node.refusal);
     case "session-metadata":
       return new SessionMetadataUnavailableError(node.reason, undefined, node.missingTables);
     case "error":
@@ -342,6 +254,8 @@ export function createError(node: ErrorIdentity & { message: string }): Error {
       return new McpOAuthStoreCorruptionError("", "");
     case "aggregate":
       return new AggregateError([], node.message);
+    case "auth-profile-store-unreadable":
+      return new AuthProfileStoreUnreadableError(node.databasePath);
     case "state-owner-contention":
       return new GatewayStateOwnerContentionError(node.databasePath);
     case "ownership-metadata":

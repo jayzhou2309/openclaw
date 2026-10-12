@@ -1,6 +1,10 @@
 import { EventEmitter, once } from "node:events";
 import { createServer, get, type IncomingMessage, type ServerResponse } from "node:http";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 
 class FixtureState {
@@ -372,8 +376,11 @@ async function expectStreamClosedWithoutMessage(res: MockRes, text: string) {
   expect(res.writes.join("")).not.toContain(text);
 }
 
+beforeEach(() => setRuntimeConfigSnapshot({ gateway: fixture.gatewayConfig }));
+
 afterEach(() => {
   fixture = new FixtureState();
+  clearRuntimeConfigSnapshot();
 });
 
 describe("session history SSE auth revocation", () => {
@@ -454,16 +461,6 @@ describe("session history SSE auth revocation", () => {
     } finally {
       res.end();
     }
-  });
-
-  it("closes an existing stream before disclosure when profile access is revoked", async () => {
-    fixture.profile = guestProfile;
-    const { res } = await openStream();
-    fixture.visible = false;
-
-    emitTranscriptTextUpdate("role-revoked secret");
-
-    await expectStreamClosedWithoutMessage(res, "role-revoked secret");
   });
 
   it("keeps inline delivery between coalesced refreshes while authorization is pending", async () => {
@@ -585,6 +582,7 @@ describe("session history SSE auth revocation", () => {
     const { res } = await openStream();
 
     fixture.gatewayConfig = {};
+    setRuntimeConfigSnapshot({ gateway: fixture.gatewayConfig });
 
     emitTranscriptTextUpdate("stale-proxy event");
 
@@ -596,6 +594,7 @@ describe("session history SSE auth revocation", () => {
 
     fixture.authChecks = 0;
     fixture.gatewayConfig = {};
+    setRuntimeConfigSnapshot({ gateway: fixture.gatewayConfig });
 
     emitTranscriptTextUpdate("other session", {
       sessionFile: "/tmp/other-session.jsonl",

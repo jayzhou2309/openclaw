@@ -4,6 +4,10 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import {
   loadSessionEntry,
   replaceSessionEntry,
   patchSessionEntryCore,
@@ -25,10 +29,14 @@ import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-pla
 import { admitWorkerStopChat } from "./server-worker-placement.test-harness.js";
 import * as lifecycleState from "./session-lifecycle-state.js";
 import { closeSessionSqliteDatabasesForTest } from "./session-utils.test-support.js";
-const routing = vi.hoisted(() => ({ load: vi.fn() }));
-vi.mock("./session-utils.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./session-utils.js")>()),
-  loadSessionEntry: routing.load,
+const routing = vi.hoisted(() => ({
+  load: vi.fn<
+    typeof import("./session-utils-store-worker.js").loadGatewaySessionEntryReadOnlyInWorker
+  >(),
+}));
+vi.mock("./session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-utils-store-worker.js")>()),
+  loadGatewaySessionEntryReadOnlyInWorker: routing.load,
 }));
 
 it.each(["success", "failed-write", "setup-failed-write"] as const)(
@@ -39,9 +47,11 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
       outcome === "success"
         ? undefined
         : vi
-            .spyOn(lifecycleState, "persistGatewaySessionLifecycleEvent")
-            .mockImplementation(() => terminalWrite.promise);
+            .spyOn(lifecycleState, "prepareGatewaySessionLifecycleEvent")
+            .mockReturnValue(() => terminalWrite.promise);
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "worker-stop-terminal-"));
+    const cfg = {};
+    setRuntimeConfigSnapshot(cfg);
     const target = {
       storePath: path.join(root, "sessions.json"),
       sessionKey: "agent:main:terminal-stop",
@@ -78,20 +88,22 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
       chatAbortControllers: new Map(),
       chatQueuedTurns: new Map(),
       agentRunSeq: new Map(),
-      getRuntimeConfig: () => ({}),
+      getRuntimeConfig: () => cfg,
       removeChatRun: vi.fn(),
       broadcast: vi.fn(),
       nodeSendToSession: vi.fn(),
       cancelRunBoundApprovals: vi.fn(),
       logGateway: log,
     } as unknown as import("./server-methods/types.js").GatewayRequestContext;
-    routing.load.mockImplementation(() => ({
-      ...target,
-      agentId: "main",
-      canonicalKey: target.sessionKey,
-      cfg: {},
-      entry: loadSessionEntry(target),
-    }));
+    const { loadGatewaySessionEntryReadOnlyInWorker } = await vi.importActual<
+      typeof import("./session-utils-store-worker.js")
+    >("./session-utils-store-worker.js");
+    routing.load.mockImplementation((params) =>
+      loadGatewaySessionEntryReadOnlyInWorker({
+        ...params,
+        cfg: { ...params.cfg, session: { ...params.cfg.session, store: target.storePath } },
+      }),
+    );
     let subscriptions: ReturnType<typeof startGatewayEventSubscriptions> | undefined;
     let heldWriter: Promise<unknown> | undefined;
     let reclaim: Promise<unknown> | undefined;
@@ -157,7 +169,6 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
       }
       await replaceSessionEntry(target, {
         ...entry,
-        status: "running",
         lifecycleRunId: runId,
         startedAt: Date.now(),
       });
@@ -185,11 +196,15 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
         store: { [target.sessionKey]: entry },
       };
       const barriers = createGatewayWorkerPlacementReclaimBarriers({
-        placements: { get: () => placement as never, waitForTurnClaimRelease: async () => {} },
+        placements: {
+          get: () => placement as never,
+          getAsync: async () => placement as never,
+          waitForTurnClaimRelease: async () => {},
+        },
         loadSessionRuntime: async () =>
           ({
             managedWorktrees: {
-              findLiveByOwner: () => ({
+              findLiveByOwner: async () => ({
                 id: "terminal-worktree",
                 ownerId: target.sessionKey,
                 path: root,
@@ -205,7 +220,7 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
         sessionId,
         sessionKey: target.sessionKey,
         agentId: "main",
-        begin: () => ({ ...placement, state: "draining" }) as never,
+        begin: async () => ({ ...placement, state: "draining" }) as never,
         reclaim: async () => {
           reclaimEffectStarted = true;
           expect(loadSessionEntry(target)).toMatchObject({
@@ -221,7 +236,7 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
       expect(context.chatAbortControllers.has(runId)).toBe(true);
       expect(owned.activeRunAbort.entry?.projectSessionTerminalPersistence).toBeInstanceOf(Promise);
       expect(reclaimEffectStarted).toBe(false);
-      expect(loadSessionEntry(target)?.status).toBe("running");
+      expect(loadSessionEntry(target)?.status).toBeUndefined();
       const late = await admit("during-terminal-write");
       expect(late.ok).toBe(false);
       expect(
@@ -251,7 +266,7 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
         await heldWriter;
         await rejected;
         expect(reclaimEffectStarted).toBe(false);
-        expect(loadSessionEntry(target)?.status).toBe("running");
+        expect(loadSessionEntry(target)?.status).toBeUndefined();
         return;
       }
       releaseWriter.resolve();
@@ -286,6 +301,7 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
       subscriptions?.transcriptUnsub();
       subscriptions?.lifecycleUnsub();
       await closeSessionSqliteDatabasesForTest();
+      clearRuntimeConfigSnapshot();
       persistenceSpy?.mockRestore();
       routing.load.mockReset();
       await fs.rm(root, { recursive: true, force: true });

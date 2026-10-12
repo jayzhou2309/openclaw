@@ -5,7 +5,7 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { EnvironmentSummary } from "../../../packages/gateway-protocol/src/index.js";
-import { getRuntimeConfig } from "../../config/config.js";
+import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
@@ -46,7 +46,12 @@ function connectedNode(deviceId: string): NodeWorkerSupervisorNodeProof {
     clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
     clientMode: GATEWAY_CLIENT_MODES.NODE,
     protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-    workerHost: { enabled: true, capacity: { total: 2, available: 2 }, capturedExecPolicy: true },
+    workerHost: {
+      enabled: true,
+      capacity: { total: 2, available: 2 },
+      capturedExecPolicy: true,
+      promptContext: 1,
+    },
     commands: ["system.run"],
   };
 }
@@ -61,6 +66,7 @@ async function withDemandFixture(
   }) => Promise<void>,
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
     const sessionRuntime =
       await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
     dispatchTestMocks.resolveTarget.mockImplementation(
@@ -85,6 +91,23 @@ async function withDemandFixture(
     const placements = new Map<string, WorkerSessionPlacementRecord>();
     const environments = new Map<string, Environment>();
     const placementReader = {
+      prepareRuntimeRefresh: async (sessionId: string) => {
+        const placement = placements.get(sessionId);
+        let released = false;
+        return {
+          placement,
+          move: undefined,
+          pendingResult: undefined,
+          assertCurrent: () => {
+            if (released || placements.get(sessionId) !== placement) {
+              throw new Error("Worker placement observation is no longer current");
+            }
+          },
+          release: () => {
+            released = true;
+          },
+        };
+      },
       getMany: (ids: readonly string[]) =>
         new Map(
           ids.flatMap((id) => {

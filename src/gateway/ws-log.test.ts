@@ -79,6 +79,51 @@ describe("gateway ws log helpers", () => {
     },
   );
 
+  test("evicts only the oldest unanswered request timings when the cap is exceeded", () => {
+    setVerbose(false);
+    setLoggerOverride({ level: "silent", consoleLevel: "info" });
+    const output = vi.fn();
+    loggingState.rawConsole = { log: output, info: output, warn: output, error: output };
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const frame = (id: string) => ({ connId: "evict", id, method: "health" });
+    const answer = (id: string) => {
+      output.mockClear();
+      logWs("out", "res", { ...frame(id), ok: true });
+    };
+    // Old requests that never get a response, then the request under test, then enough
+    // newer ones to cross the cap.
+    for (let index = 0; index < 1_500; index += 1) {
+      logWs("in", "req", frame(`stale-${index}`));
+    }
+    logWs("in", "req", frame("live"));
+    for (let index = 0; index < 600; index += 1) {
+      logWs("in", "req", frame(`newer-${index}`));
+    }
+    clock.mockReturnValue(1_000 + 5_000);
+    try {
+      // The request that was in flight when the cap tripped keeps its slow-response timing.
+      answer("live");
+      expect(output).toHaveBeenLastCalledWith(expect.stringContaining("5000ms"));
+      answer("newer-599");
+      expect(output).toHaveBeenLastCalledWith(expect.stringContaining("5000ms"));
+      // Exactly the 101 oldest entries were dropped to hold the 2000 bound.
+      answer("stale-0");
+      expect(output).not.toHaveBeenCalled();
+      answer("stale-100");
+      expect(output).not.toHaveBeenCalled();
+      answer("stale-101");
+      expect(output).toHaveBeenLastCalledWith(expect.stringContaining("5000ms"));
+    } finally {
+      clock.mockReturnValue(1_000);
+      for (let index = 0; index < 1_500; index += 1) {
+        logWs("out", "res", { ...frame(`stale-${index}`), ok: true });
+      }
+      for (let index = 0; index < 600; index += 1) {
+        logWs("out", "res", { ...frame(`newer-${index}`), ok: true });
+      }
+    }
+  });
+
   test("admits only useful optimized-mode frames and honors console info enablement", () => {
     setVerbose(false);
     setLoggerOverride({ level: "silent", consoleLevel: "info" });
@@ -217,7 +262,7 @@ describe("gateway ws log helpers", () => {
     },
   );
 
-  test("summarizeAgentEventForWsLog compacts assistant payloads", () => {
+  test("summarizeAgentEventForWsLog counts assistant content and media", () => {
     const summary = summarizeAgentEventForWsLog({
       runId: "12345678-1234-1234-1234-123456789abc",
       sessionKey: "agent:main:main",
@@ -235,34 +280,31 @@ describe("gateway ws log helpers", () => {
     expect(summary.stream).toBe("assistant");
     expect(summary.aseq).toBe(2);
     expect(summary.media).toBe(2);
-    expect(summary.text).toBeTypeOf("string");
-    expect(summary.text).not.toContain("\n");
+    expect(summary.textChars).toBe(260);
+    expect(summary).not.toHaveProperty("text");
   });
 
-  test.each([
-    { name: "Unicode whitespace", text: "\u00a0hello\u2028world\ufeff", expected: "hello world" },
-    { name: "blank text", text: "\u00a0\n ".repeat(200), expected: undefined },
-    { name: "long leading whitespace", text: `${" ".repeat(512)}hello`, expected: "hello" },
-    {
-      name: "long interior whitespace",
-      text: `hello${" ".repeat(512)}world`,
-      expected: "hello world",
-    },
-    {
-      name: "trailing whitespace at the limit",
-      text: `${"a".repeat(160)}${" ".repeat(512)}`,
-      expected: "a".repeat(160),
-    },
-    {
-      name: "emoji at the limit",
-      text: `${"a".repeat(158)}😀tail`,
-      expected: `${"a".repeat(158)}…`,
-    },
-    { name: "long text", text: "a".repeat(8192), expected: `${"a".repeat(159)}…` },
-  ])("summarizeAgentEventForWsLog preserves $name", ({ text, expected }) => {
-    const summary = summarizeAgentEventForWsLog({ stream: "assistant", data: { text } });
-    expect(summary.text).toBe(expected);
-    expect(Object.hasOwn(summary, "text")).toBe(expected !== undefined);
+  test.each(["assistant", "tool"])("keeps %s content out of verbose event logs", (stream) => {
+    setVerbose(true);
+    setGatewayWsLogStyle("full");
+    setLoggerOverride({ level: "silent", consoleLevel: "info" });
+    const output = vi.fn();
+    loggingState.rawConsole = { log: output, info: output, warn: output, error: output };
+    const marker = "synthetic-private-content";
+    const summary = summarizeAgentEventForWsLog({
+      runId: "run-1",
+      sessionKey: "agent:main:thread-1",
+      stream,
+      data: { text: marker, meta: marker, phase: "start", name: "exec" },
+    });
+
+    logWs("out", "event", { event: "agent", ...summary });
+
+    expect(output).toHaveBeenCalled();
+    expect(JSON.stringify(output.mock.calls)).not.toContain(marker);
+    expect(output).toHaveBeenLastCalledWith(
+      expect.stringContaining(`${stream === "assistant" ? "textChars" : "metaChars"}=25`),
+    );
   });
 
   test("summarizeAgentEventForWsLog includes tool metadata", () => {

@@ -24,6 +24,7 @@ import {
   clearCrabboxWarmImageCapture,
   crabboxCaptureUnsupportedSentence,
   crabboxWarmImageRecoveryHint,
+  isCrabboxCaptureRefusalRetained,
   sameCrabboxWarmImageGeneration,
   withoutCrabboxWarmImageOperation,
   type openCrabboxWarmImageStore,
@@ -65,7 +66,7 @@ export function createCrabboxWarmImageCapture(dependencies: {
   const warnUnsupported = (message: string) =>
     warnOnce(
       "capture unsupported",
-      `${crabboxCaptureUnsupportedSentence(message)} Workers for this profile use an existing compatible snapshot when one is available and otherwise provision cold; each eligible worker retries capture, so Crabbox configuration changes apply to the next dispatch. Set settings.warmImage: false on the profile to stop capture attempts.`,
+      `${crabboxCaptureUnsupportedSentence(message)} Workers for this profile use an existing compatible snapshot when one is available and otherwise provision cold; capture attempts are skipped until warmImages.refreshAfter has elapsed since the refusal. Set settings.warmImage: false on the profile to stop capture attempts.`,
       false,
     );
 
@@ -75,6 +76,7 @@ export function createCrabboxWarmImageCapture(dependencies: {
       forkedCheckpointId?: string;
       projectCaptureRequired?: true;
       projectCaptureReplay?: true;
+      onCaptureStart?: () => void;
     },
     prepareAndScrubSource?: (scrubScript: string) => Promise<void>,
   ): Promise<boolean> {
@@ -113,6 +115,9 @@ export function createCrabboxWarmImageCapture(dependencies: {
         }
         let existing = (await openStore().lookup(key))!;
         if (existing.operation) {
+          return;
+        }
+        if (isCrabboxCaptureRefusalRetained(existing, dependencies.policy.refreshAfterMs)) {
           return;
         }
         if (existing.image?.pinned && existing.previous?.pinned) {
@@ -221,6 +226,7 @@ export function createCrabboxWarmImageCapture(dependencies: {
         if (!claimed) {
           return;
         }
+        context.onCaptureStart?.();
         // Runtime preparation belongs only to a claimed capture. Scrub its forwarded
         // credential artifacts afterward, before any native image can include them.
         assertCurrent(context);
@@ -275,8 +281,9 @@ export function createCrabboxWarmImageCapture(dependencies: {
               "--wait-timeout",
               `${WARM_IMAGE_NATIVE_WAIT_TIMEOUT_MS}ms`,
               "--json",
-              // Daytona requires explicit permission to stop the scrubbed source for capture.
-              ...(context.provider === "daytona" ? ["--no-reboot=false"] : []),
+              // Daytona and direct Azure snapshots require explicit permission to stop the
+              // scrubbed source for capture. Both owners restore or retire it afterward.
+              ...(["azure", "daytona"].includes(context.provider) ? ["--no-reboot=false"] : []),
               ...(context.provider === "machine0" ? ["--strategy", "image"] : []),
             ],
             resolveCrabboxCheckpointCaptureTimeoutMs(context.provider),

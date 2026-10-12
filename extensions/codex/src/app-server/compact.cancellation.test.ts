@@ -1,6 +1,10 @@
 import path from "node:path";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -104,10 +108,12 @@ describe("maybeCompactCodexAppServerSession", () => {
   beforeEach(() => {
     resetCodexTestBindingStore();
     tempDir = tempDirs.make();
+    setRuntimeConfigSnapshot({});
   });
 
   afterEach(() => {
     resetCodexAppServerClientFactoryForTest();
+    clearRuntimeConfigSnapshot();
   });
 
   it.each(["generation", "deadline", "abort"] as const)(
@@ -199,20 +205,24 @@ describe("maybeCompactCodexAppServerSession", () => {
         queued = withCodexAppServerThreadMutation(binding.threadId, nextMutation);
         await vi.advanceTimersByTimeAsync(1_000);
 
+        expect(await retirementOutcome.promise).toBe("settled");
         expect(harness.writes.map((line) => JSON.parse(line).method)).toEqual([
           "thread/compact/start",
+          ...(rejection === "generation" ? ["thread/unsubscribe"] : []),
         ]);
-        expect(await retirementOutcome.promise).toBe("settled");
         await expect(pending).resolves.toMatchObject({
           ok: false,
           compacted: false,
-          reason: expect.stringContaining(
+          reason:
             rejection === "generation"
-              ? "Codex session generation is no longer current"
-              : rejection === "deadline"
-                ? "thread/compact/start timed out"
-                : "thread/compact/start aborted",
-          ),
+              ? expect.stringMatching(
+                  /Codex session (generation is no longer current|execution policy changed)/,
+                )
+              : expect.stringContaining(
+                  rejection === "deadline"
+                    ? "thread/compact/start timed out"
+                    : "thread/compact/start aborted",
+                ),
         });
         expect(closeAndWait).not.toHaveBeenCalled();
         expect(bindingStore.read(current)).toEqual(binding);
@@ -225,7 +235,11 @@ describe("maybeCompactCodexAppServerSession", () => {
           storePath: scope.storePath,
         });
         expect(recovered.binding).toEqual(binding);
-        if (rejection === "abort") {
+        if (rejection === "generation") {
+          await expect(
+            consumeCodexAppServerLiveThread(harness.client, binding.threadId),
+          ).resolves.toBeUndefined();
+        } else if (rejection === "abort") {
           await expect(
             consumeCodexAppServerLiveThread(harness.client, binding.threadId),
           ).resolves.toEqual(expect.objectContaining({ release: expect.any(Function) }));

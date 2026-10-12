@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { replyRunRegistry } from "../auto-reply/reply/reply-run-registry.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
 import {
   appendTranscriptMessage,
@@ -15,7 +16,10 @@ import {
   resetSessionEntryLifecycle,
 } from "../config/sessions/session-accessor.sqlite-lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db-lifecycle.js";
+import {
+  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
+} from "../state/openclaw-agent-db-lifecycle.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
   resolveIncognitoOpenClawAgentSqlitePath,
@@ -66,6 +70,7 @@ async function withLifetime(
 ) {
   await withOpenClawTestState({ label: "incognito-lifetime" }, async (state) => {
     await state.writeConfig(config);
+    setRuntimeConfigSnapshot(config);
     const time = createGatewaySchedulerClock(Date.now());
     vi.spyOn(Date, "now").mockImplementation(time.clock.now);
     const scheduler = createTestGatewayScheduler(time.clock);
@@ -280,7 +285,7 @@ it.each(["session replacement", "database replacement", "Gateway stop"] as const
             deleteTranscriptWithoutArchive: true,
           });
         } else if (replacement === "database replacement") {
-          closeOpenClawAgentDatabaseByPath(scope.storePath);
+          await closeOpenClawAgentDatabaseByPathAsync(scope.storePath);
         } else {
           stopping = owner.stop();
         }

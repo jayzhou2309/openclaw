@@ -11,6 +11,7 @@ import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { onOutboundDeliveryEnqueued } from "../delivery-queue-cache.js";
 import { loadDeliveryQueueEntries } from "../delivery-queue-sqlite.js";
 import { isDeliveryRecoveryOwnedRetry } from "../delivery-recovery.shared.js";
 import { sqliteWorkerPreloadEnv } from "../sqlite-worker-preload.test-support.js";
@@ -39,11 +40,13 @@ let deliverStructuredOutboundPayloadsInternal: typeof import("./deliver.js").del
 
 describe("enqueue publication custody through the real sender", () => {
   const fixtures = installDeliveryQueueTmpDirHooks();
+  let unsubscribeEnqueued = () => {};
   beforeAll(async () => {
     ({ deliverOutboundPayloads, deliverStructuredOutboundPayloadsInternal } =
       await import("./deliver.js"));
   });
   afterEach(() => {
+    unsubscribeEnqueued();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     resetPluginRuntimeStateForTest();
@@ -115,6 +118,8 @@ describe("enqueue publication custody through the real sender", () => {
     const { stateDir, mediaUrl } = await source();
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const send = installSender();
+    const enqueued = vi.fn();
+    unsubscribeEnqueued = onOutboundDeliveryEnqueued(enqueued);
     const terminals: string[] = [];
     const unsubscribe = onTrustedMessageAuditEvent((event) => {
       if (event.action === "message.outbound.finished") {
@@ -141,6 +146,7 @@ describe("enqueue publication custody through the real sender", () => {
           ]),
         ).toBe("created");
         await reply.lose();
+        expect(enqueued).toHaveBeenCalledExactlyOnceWith(stateDir);
         const settled = await outcome;
         expect("error" in settled && isDeliveryRecoveryOwnedRetry(settled.error)).toBe(true);
         expect(send).not.toHaveBeenCalled();
@@ -173,43 +179,21 @@ describe("enqueue publication custody through the real sender", () => {
     }
   });
 
-  it("releases staged media after a known serialization failure and still permits best-effort delivery", async () => {
-    const { stateDir, mediaUrl } = await source();
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const send = installSender();
-    const reply = holdEnqueueReply();
-    const identity = {
-      name: "synthetic",
-      toJSON() {
-        throw new Error("known JSON preparation failure");
-      },
-    };
-    try {
-      await deliverOutboundPayloads({
-        ...deliveryParams(stateDir),
-        payloads: [{ mediaUrl }],
-        identity,
-      });
-      expect(send).toHaveBeenCalledOnce();
-      expect(reply.attempts()).toBe(0);
-      await expectReleasedMedia(stateDir);
-    } finally {
-      reply.restore();
-    }
-  });
-
-  it.each(["media", "text"] as const)(
-    "cleans a fully rolled-back native enqueue and preserves best-effort live sending (%s)",
-    async (kind) => {
+  it.each([{ failure: "native rollback", kind: "media", attempts: 1 }] as const)(
+    "releases $kind staging after $failure and permits best-effort live sending",
+    async ({ failure, kind, attempts }) => {
       const { stateDir, mediaUrl } = await source();
+      const enqueued = vi.fn();
+      unsubscribeEnqueued = onOutboundDeliveryEnqueued(enqueued);
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-      await fs.mkdir(path.join(stateDir, "delivery-queue-media"), { recursive: true });
-      const databasePath = openOpenClawStateDatabase().path;
-      const armPath = path.join(stateDir, "arm-rollback");
-      const preloadPath = path.join(stateDir, "enqueue-rollback.cjs");
-      await fs.writeFile(
-        preloadPath,
-        `
+      if (failure === "native rollback") {
+        await fs.mkdir(path.join(stateDir, "delivery-queue-media"), { recursive: true });
+        const databasePath = openOpenClawStateDatabase().path;
+        const armPath = path.join(stateDir, "arm-rollback");
+        const preloadPath = path.join(stateDir, "enqueue-rollback.cjs");
+        await fs.writeFile(
+          preloadPath,
+          `
 const { isMainThread } = require("node:worker_threads");
 if (!isMainThread) {
   const fs = require("node:fs");
@@ -234,16 +218,18 @@ if (!isMainThread) {
   };
 }
 `,
-      );
-      for (const [key, value] of Object.entries(sqliteWorkerPreloadEnv(preloadPath))) {
-        vi.stubEnv(key, value);
+        );
+        for (const [key, value] of Object.entries(sqliteWorkerPreloadEnv(preloadPath))) {
+          vi.stubEnv(key, value);
+        }
+        const warmId = await enqueueDelivery(
+          { channel: "matrix", to: "!synthetic:example", payloads: [{ text: "warm" }] },
+          stateDir,
+        );
+        await ackDelivery(warmId, stateDir);
+        await fs.writeFile(armPath, "armed");
       }
-      const warmId = await enqueueDelivery(
-        { channel: "matrix", to: "!synthetic:example", payloads: [{ text: "warm" }] },
-        stateDir,
-      );
-      await ackDelivery(warmId, stateDir);
-      await fs.writeFile(armPath, "armed");
+      enqueued.mockClear();
       const send = installSender();
       const queued = vi.fn();
       const reply = holdEnqueueReply();
@@ -266,11 +252,23 @@ if (!isMainThread) {
           onDeliveryIntent: queued,
         });
         expect(admissionFailure).toMatchObject({
-          message: "synthetic enqueue transaction rejected",
+          name: "OutboundDeliveryError",
+          stage: "queue",
+          queueCustody: "released",
+          sentBeforeError: false,
+          results: [],
+          payloadOutcomes: [],
+          cause: {
+            name: "PlatformMessageNotDispatchedError",
+            code: "OPENCLAW_PLATFORM_MESSAGE_NOT_DISPATCHED",
+            retryable: true,
+            cause: { message: "synthetic enqueue transaction rejected" },
+          },
         });
-        expect(reply.attempts()).toBe(1);
+        expect(reply.attempts()).toBe(attempts);
         expect(send).toHaveBeenCalledOnce();
         expect(queued).not.toHaveBeenCalled();
+        expect(enqueued).not.toHaveBeenCalled();
         await expectReleasedMedia(stateDir);
       } finally {
         reply.restore();

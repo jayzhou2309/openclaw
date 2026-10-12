@@ -2,7 +2,7 @@ import type { ChildProcess } from "node:child_process";
 import type { NodeWorkerCleanupBinding } from "../../node-host/node-worker-launch-receipt.js";
 
 export type ServiceChildStart = {
-  type: "start";
+  type: "start" | "prepare";
   generation: string;
   command: string;
   args: string[];
@@ -27,19 +27,22 @@ export type ServiceChildStart = {
   | { ownedWorker?: never; cleanupBinding?: never }
 );
 
-export type ServiceChildControlMessage = {
-  generation: string;
-  sequence: number;
-} & (
+export type ServiceChildControlPayload =
   | { type: "cancel"; signal: "SIGTERM" | "SIGKILL" }
   | { type: "worker-start" }
+  | { type: "launch" }
   | { type: "worker-close" }
   | { type: "startup-error-ack" }
   | { type: "lineage-closed" }
-  | { type: "closing-ack"; closingSequence: number }
-);
+  | { type: "closing-ack"; closingSequence: number };
+
+export type ServiceChildControlMessage = ServiceChildControlPayload & {
+  generation: string;
+  sequence: number;
+};
 
 export type ServiceChildAnchorPayload =
+  | { type: "prepared" }
   | { type: "stdin-closed" }
   | { type: "worker-message"; message: unknown }
   | {
@@ -81,17 +84,8 @@ export type ServiceChildAnchorMessage = ServiceChildAnchorPayload & {
   sequence: number;
 };
 
-export type ServiceChildRelayRetirement = {
-  type: "retirement";
-  generation: string;
-  sequence: number;
-  anchorExited: boolean;
-  signalError?: string;
-};
-
 export type ServiceChildRelayMessage =
   | ServiceChildStart
-  | ServiceChildRelayRetirement
   | { type: "relay-error"; generation: string; error: string };
 
 export function readServiceChildMessage(

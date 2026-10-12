@@ -11,6 +11,7 @@ import {
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { admitReplyTurn } from "../../auto-reply/reply/reply-turn-admission.js";
 import { initSessionState } from "../../auto-reply/reply/session.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadTranscriptEvents,
   replaceSessionEntry,
@@ -49,11 +50,13 @@ it.each([
       const message = "Continue the existing task with this exact input.";
       const storePath = state.statePath("sessions.sqlite");
       const scope = { agentId, sessionKey, storePath };
-      await state.writeConfig({
+      const cfg = {
         agents: { defaults: { workspace: state.workspaceDir } },
         plugins: { enabled: false },
         session: { store: storePath },
-      });
+      };
+      await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
       const profile = ensureProfileForEmail("compaction-handoff@example.test");
       const entry = {
         sessionId: initialSessionId,
@@ -101,7 +104,6 @@ it.each([
       const releasePreparation = createDeferred();
       const capturedSuccessor = createDeferred();
       const releaseRuntimePlugins = createDeferred();
-      const sharedDispatchSettled = createDeferred();
       const originalDispatch = dispatch.dispatchInboundMessageWithProjectedDispatcher;
       const originalLoadRuntimePlugins = dispatchRuntimeLoaders.loadRuntimePlugins;
       const holdRuntimePlugins =
@@ -116,8 +118,8 @@ it.each([
       let owned: ChatDispatchParams | undefined;
       let successor: ReplyOperation | undefined;
       let originalRegistration: ChatDispatchParams["admission"]["sessionBinding"] | undefined;
-      const resolver = vi.fn<InternalGetReplyFromConfig>(async (ctx, options, cfg) => {
-        if (!options || !cfg || !owned || !originalRegistration) {
+      const resolver = vi.fn<InternalGetReplyFromConfig>(async (ctx, options, replyConfig) => {
+        if (!options || !replyConfig || !owned || !originalRegistration) {
           throw new Error("fixture requires the original accepted chat dispatch");
         }
         expect(ctx.BodyForAgent).toBe(message);
@@ -125,7 +127,7 @@ it.each([
         expect(options.expectedExistingSessionId).toBe(finalSessionId);
         const initialized = await initSessionState({
           ctx: finalizeInboundContext(ctx),
-          cfg,
+          cfg: replyConfig,
           commandAuthorized: ctx.CommandAuthorized === true,
           expectedExistingSessionId: options.expectedExistingSessionId,
           requestedSessionId: options.requestedSessionId,
@@ -147,11 +149,7 @@ it.each([
         .mockImplementation(async (options) => {
           prepared.resolve(options);
           await releasePreparation.promise;
-          try {
-            return await originalDispatch({ ...options, replyResolver: resolver });
-          } finally {
-            sharedDispatchSettled.resolve();
-          }
+          return await originalDispatch({ ...options, replyResolver: resolver });
         });
       try {
         const params = { sessionKey, sessionId: initialSessionId, message, idempotencyKey: runId };
@@ -231,8 +229,9 @@ it.each([
           expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
           releaseRuntimePlugins.resolve();
         }
-        await sharedDispatchSettled.promise;
-        await vi.waitFor(() => expect(context.chatAbortControllers.has(runId)).toBe(false));
+        // Admission release follows the chat owner's post-dispatch persistence and cleanup.
+        await owned.admission.gatewayWorkAdmission.released;
+        expect(context.chatAbortControllers.has(runId)).toBe(false);
 
         if (
           scenario === "compaction" ||
@@ -270,9 +269,7 @@ it.each([
         releasePreparation.resolve();
         releaseRuntimePlugins.resolve();
         if (owned) {
-          await sharedDispatchSettled.promise;
-          await vi.waitFor(() => expect(context.chatAbortControllers.has(runId)).toBe(false));
-          owned.admission.cleanupAdmittedRun();
+          await owned.admission.gatewayWorkAdmission.released;
         }
         holdPreparation.mockRestore();
         holdRuntimePlugins?.mockRestore();

@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { extractSqliteTableSchema } from "../../infra/sqlite-schema-sql.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import { assertOpenClawAgentSchemaContains } from "../../state/openclaw-agent-db-schema-helpers.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
@@ -18,19 +19,19 @@ import {
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../state/openclaw-agent-schema.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { SessionWorkStartInvalidatedError } from "./lifecycle.js";
 import { upsertSessionEntryCore } from "./session-accessor.sqlite-entry.js";
 import { copySessionNodeArtifactsForRepair } from "./session-accessor.sqlite-node-artifacts.js";
-import {
-  replaceTranscriptEvents,
-  replaceTranscriptSuffixEventsSync,
-} from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptSuffixEventsSync } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import {
   listSessionReactions,
   SessionReactionLimitError,
   SessionReactionMessageMissingError,
   setSessionReactionAsync,
 } from "./session-reaction-store.js";
+import { setSessionReactionInDatabase } from "./session-reaction-store.kernel.js";
 
 let root: string;
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -39,6 +40,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     closeOpenClawAgentDatabasesForTest();
     await closeStateDatabaseForTest();
     cleanup();
+    clearRuntimeConfigSnapshot();
   }),
 );
 let scope: { agentId: string; env: NodeJS.ProcessEnv; sessionKey: string; storePath?: string };
@@ -83,12 +85,26 @@ function stampReaction(emoji: string, identityId: string, createdAt: number) {
   }, scope);
 }
 
+function observeCallerSql() {
+  const database = openOpenClawAgentDatabase({ ...scope, path: scope.storePath });
+  const statementPrototype: StatementSync = Object.getPrototypeOf(database.db.prepare("SELECT 1"));
+  const databasePrototype: DatabaseSync = Object.getPrototypeOf(database.db);
+  return [
+    vi.spyOn(statementPrototype, "all"),
+    vi.spyOn(statementPrototype, "get"),
+    vi.spyOn(statementPrototype, "iterate"),
+    vi.spyOn(statementPrototype, "run"),
+    vi.spyOn(databasePrototype, "exec"),
+  ];
+}
+
 beforeEach(async () => {
   scope = {
     agentId: "main",
     env: { ...process.env, OPENCLAW_STATE_DIR: root },
     sessionKey: `agent:main:reaction-${sessionIndex++}`,
   };
+  setRuntimeConfigSnapshot({});
   await upsertSessionEntryCore(scope, { sessionId: "session-a", updatedAt: 1 });
   await seedMessages("session-a", ["message-a", "message-b", "overflow", "replacement"]);
 });
@@ -96,26 +112,25 @@ beforeEach(async () => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("session reaction store", () => {
-  it.each(["default", "shared"] as const)(
-    "writes %s reactions without running SQLite on the caller's thread",
+  it.each(["default", "shared", "incognito"] as const)(
+    "writes %s reactions through their database owner",
     async (store) => {
-      if (store === "shared") {
-        scope = { ...scope, storePath: path.join(root, "shared-reactions.sqlite") };
-        await upsertSessionEntryCore(scope, { sessionId: "session-a", updatedAt: 1 });
+      if (store !== "default") {
+        scope = {
+          ...scope,
+          ...(store === "shared"
+            ? { storePath: path.join(root, "shared-reactions.sqlite") }
+            : { sessionKey: `agent:main:dashboard:incognito-reaction-${sessionIndex}` }),
+        };
+        await upsertSessionEntryCore(scope, {
+          sessionId: "session-a",
+          updatedAt: 1,
+          ...(store === "incognito" ? { incognito: true } : {}),
+        });
         await seedMessages("session-a", [reaction.messageId]);
       }
-      const database = openOpenClawAgentDatabase({ ...scope, path: scope.storePath });
-      const statementPrototype: StatementSync = Object.getPrototypeOf(
-        database.db.prepare("SELECT 1"),
-      );
-      const databasePrototype: DatabaseSync = Object.getPrototypeOf(database.db);
-      const methods = [
-        vi.spyOn(statementPrototype, "all"),
-        vi.spyOn(statementPrototype, "get"),
-        vi.spyOn(statementPrototype, "iterate"),
-        vi.spyOn(statementPrototype, "run"),
-        vi.spyOn(databasePrototype, "exec"),
-      ];
+      const admitted = vi.spyOn(admission, "createSqliteWorkerOperationAdmission");
+      const methods = store === "incognito" ? [] : observeCallerSql();
       try {
         expect(await setSessionReactionAsync(scope, reaction)).toEqual({
           reactions: [{ emoji: "👍", count: 1, identities: [{ id: "alice", label: "Alice" }] }],
@@ -130,24 +145,24 @@ describe("session reaction store", () => {
           method.mockRestore();
         }
       }
-      expect(listSessionReactions(scope, { sessionId: "session-a" })[reaction.messageId]).toEqual([
-        { emoji: "👍", count: 1, identities: [{ id: "alice", label: "Alice" }] },
-      ]);
+      expect(
+        (await listSessionReactions(scope, { sessionId: "session-a" }))[reaction.messageId],
+      ).toEqual([{ emoji: "👍", count: 1, identities: [{ id: "alice", label: "Alice" }] }]);
+      if (store === "incognito") {
+        expect(admitted).not.toHaveBeenCalled();
+        expect(existsSync(resolveIncognitoOpenClawAgentSqlitePath(scope))).toBe(false);
+      }
     },
   );
 
   it("rolls back a reaction when the caller's authority expires at commit admission", async () => {
-    const createAdmission = admission.createSqliteWorkerOperationAdmission;
     let current = true;
-    vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (callback, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === "commit") {
-            current = false;
-          }
-          return callback(request, grant);
-        }, attachment),
-    );
+    probe.admission(admission, (request, grant, callback) => {
+      if (request.stage === "commit") {
+        current = false;
+      }
+      return callback(request, grant);
+    });
     await expect(
       setSessionReactionAsync(scope, {
         ...reaction,
@@ -159,24 +174,11 @@ describe("session reaction store", () => {
       }),
     ).rejects.toThrow("Reaction authority revoked");
     expect(current).toBe(false);
-    expect(listSessionReactions(scope, { sessionId: "session-a" })).toEqual({});
-  });
-
-  it("keeps incognito reaction writes with their process-held database", async () => {
-    scope = { ...scope, sessionKey: `agent:main:dashboard:incognito-reaction-${sessionIndex}` };
-    await upsertSessionEntryCore(scope, { sessionId: "session-a", updatedAt: 1, incognito: true });
-    await seedMessages("session-a", [reaction.messageId]);
-    const admitted = vi.spyOn(admission, "createSqliteWorkerOperationAdmission");
-    expect((await setSessionReactionAsync(scope, reaction)).changed).toBe(true);
-    expect(listSessionReactions(scope, { sessionId: "session-a" })[reaction.messageId]).toEqual([
-      { emoji: "👍", count: 1, identities: [{ id: "alice", label: "Alice" }] },
-    ]);
-    expect(admitted).not.toHaveBeenCalled();
-    expect(existsSync(resolveIncognitoOpenClawAgentSqlitePath(scope))).toBe(false);
+    expect(await listSessionReactions(scope, { sessionId: "session-a" })).toEqual({});
   });
 
   it("toggles idempotently and summarizes emoji and identities in first-created order", async () => {
-    expect(listSessionReactions(scope, { sessionId: "session-a" })).toEqual({});
+    expect(await listSessionReactions(scope, { sessionId: "session-a" })).toEqual({});
     const first = await setSessionReactionAsync(scope, reaction);
     expect(first).toEqual({
       reactions: [{ emoji: "👍", count: 1, identities: [{ id: "alice", label: "Alice" }] }],
@@ -200,7 +202,7 @@ describe("session reaction store", () => {
       { emoji: "🎉", count: 1, identities: [{ id: "alice", label: "Alice" }] },
     ]);
     await setSessionReactionAsync(scope, { ...reaction, messageId: "message-b", emoji: "👀" });
-    expect(listSessionReactions(scope, { sessionId: "session-a" })).toEqual({
+    expect(await listSessionReactions(scope, { sessionId: "session-a" })).toEqual({
       "message-a": updated,
       "message-b": [{ emoji: "👀", count: 1, identities: [{ id: "alice", label: "Alice" }] }],
     });
@@ -214,7 +216,38 @@ describe("session reaction store", () => {
       newestRemainingEmoji: "👍",
       changed: false,
     });
-    expect(listSessionReactions(scope, { sessionId: "session-b" })).toEqual({});
+    expect(await listSessionReactions(scope, { sessionId: "session-b" })).toEqual({});
+  });
+
+  it("returns committed reaction rows in SQLite order when timestamps tie", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(400);
+    const set = (params: typeof reaction) =>
+      runOpenClawAgentWriteTransaction(
+        (database) => setSessionReactionInDatabase(database, scope.sessionKey, params),
+        scope,
+      );
+    set({ ...reaction, emoji: "😀", identityId: "😀" });
+    set({ ...reaction, emoji: "\uE000", identityId: "\uE000" });
+    const result = set({
+      ...reaction,
+      emoji: "😀",
+      identityId: "\uE000",
+    });
+    const expected = [
+      { emoji: "\uE000", count: 1, identities: [{ id: "\uE000", label: "Alice" }] },
+      {
+        emoji: "😀",
+        count: 2,
+        identities: [
+          { id: "\uE000", label: "Alice" },
+          { id: "😀", label: "Alice" },
+        ],
+      },
+    ];
+    expect(result).toEqual({ reactions: expected, newestRemainingEmoji: "😀", changed: true });
+    expect(
+      (await listSessionReactions(scope, { sessionId: "session-a" }))[reaction.messageId],
+    ).toEqual(expected);
   });
 
   it.each([
@@ -254,6 +287,9 @@ describe("session reaction store", () => {
     const result = await setSessionReactionAsync(scope, removal);
     expect(result).toMatchObject({ changed: true, newestRemainingEmoji: scenario.expected });
     expect(result.reactions.map(({ emoji }) => emoji)).toEqual(["👍", "🎉"]);
+    expect(
+      (await listSessionReactions(scope, { sessionId: "session-a" }))[reaction.messageId],
+    ).toEqual(result.reactions);
     expect(await setSessionReactionAsync(scope, removal)).toMatchObject({
       changed: false,
       newestRemainingEmoji: scenario.expected,
@@ -285,40 +321,8 @@ describe("session reaction store", () => {
     });
   });
 
-  it("admits exactly 5000 rows per session and frees capacity on removal", async () => {
-    runOpenClawAgentWriteTransaction((database) => {
-      const db = getNodeSqliteKysely<Pick<DB, "session_reactions">>(database.db);
-      for (let start = 0; start < 4_999; start += 500) {
-        executeSqliteQuerySync(
-          database.db,
-          db.insertInto("session_reactions").values(
-            Array.from({ length: Math.min(500, 4_999 - start) }, (_, offset) => ({
-              session_key: scope.sessionKey,
-              session_id: "session-a",
-              message_id: `seed-${start + offset}`,
-              emoji: "👍",
-              identity_id: "alice",
-              identity_label: "Alice",
-              created_at: 1,
-            })),
-          ),
-        );
-      }
-    }, scope);
-    const atLimit = await setSessionReactionAsync(scope, reaction);
-    expect(atLimit.changed).toBe(true);
-    expect(await setSessionReactionAsync(scope, reaction)).toEqual({ ...atLimit, changed: false });
-    await expect(
-      setSessionReactionAsync(scope, { ...reaction, messageId: "overflow" }),
-    ).rejects.toThrow(SessionReactionLimitError);
-    await setSessionReactionAsync(scope, { ...reaction, remove: true });
-    await expect(
-      setSessionReactionAsync(scope, { ...reaction, messageId: "replacement" }),
-    ).resolves.toMatchObject({ changed: true });
-  });
-
-  it.each(["replacement", "suffix", "incremental suffix"] as const)(
-    "prunes deleted-message reactions and frees capacity after transcript %s",
+  it.each(["reaction removal", "replacement", "suffix", "incremental suffix"] as const)(
+    "enforces 5000 session reactions and frees capacity after %s",
     async (mutation) => {
       const sessionId = `transcript-${sessionIndex}`;
       await upsertSessionEntryCore(scope, { sessionId, updatedAt: 2 });
@@ -359,14 +363,21 @@ describe("session reaction store", () => {
           );
         }
       }, scope);
-      await setSessionReactionAsync(scope, removedReaction);
+      const atLimit = await setSessionReactionAsync(scope, removedReaction);
+      expect(atLimit.changed).toBe(true);
+      expect(await setSessionReactionAsync(scope, removedReaction)).toEqual({
+        ...atLimit,
+        changed: false,
+      });
       const nextReaction = { ...removedReaction, messageId: "retained", emoji: "👀" };
       await expect(setSessionReactionAsync(scope, nextReaction)).rejects.toThrow(
         SessionReactionLimitError,
       );
 
       const retained = events.slice(0, 2);
-      if (mutation === "replacement") {
+      if (mutation === "reaction removal") {
+        await setSessionReactionAsync(scope, { ...removedReaction, remove: true });
+      } else if (mutation === "replacement") {
         await replaceTranscriptEvents(transcriptScope, retained);
       } else {
         expect(
@@ -379,12 +390,12 @@ describe("session reaction store", () => {
         ).toBe(true);
       }
 
-      const reactions = listSessionReactions(scope, { sessionId });
+      const reactions = await listSessionReactions(scope, { sessionId });
       expect(reactions[reaction.messageId]).toBeUndefined();
       expect(reactions.retained).toMatchObject([{ emoji: "👍", count: 4_999 }]);
       expect((await setSessionReactionAsync(scope, nextReaction)).changed).toBe(true);
       await replaceTranscriptEvents(transcriptScope, []);
-      expect(listSessionReactions(scope, { sessionId })).toEqual({});
+      expect(await listSessionReactions(scope, { sessionId })).toEqual({});
     },
   );
 
@@ -395,7 +406,7 @@ describe("session reaction store", () => {
     ).rejects.toThrow(SessionWorkStartInvalidatedError);
     await upsertSessionEntryCore(scope, { sessionId: "session-b", updatedAt: 2 });
     await seedMessages("session-b", ["message-a"]);
-    expect(listSessionReactions(scope, { sessionId: "session-a" })).toEqual({});
+    expect(await listSessionReactions(scope, { sessionId: "session-a" })).toEqual({});
     await expect(setSessionReactionAsync(scope, reaction)).rejects.toThrow(
       SessionWorkStartInvalidatedError,
     );
@@ -408,7 +419,7 @@ describe("session reaction store", () => {
           .where("session_key", "=", scope.sessionKey),
       );
     }, scope);
-    expect(listSessionReactions(scope, { sessionId: "session-b" })).toEqual({});
+    expect(await listSessionReactions(scope, { sessionId: "session-b" })).toEqual({});
   });
 
   it("refuses to add a reaction for a message deleted since the caller's read", async () => {
@@ -423,7 +434,7 @@ describe("session reaction store", () => {
       newestRemainingEmoji: undefined,
       changed: false,
     });
-    expect(listSessionReactions(scope, { sessionId: "session-a" })).toEqual({
+    expect(await listSessionReactions(scope, { sessionId: "session-a" })).toEqual({
       "message-b": [{ emoji: "👍", count: 1, identities: [{ id: "alice", label: "Alice" }] }],
     });
   });
@@ -446,7 +457,7 @@ describe("session reaction store", () => {
           .where("session_key", "=", scope.sessionKey),
       );
     }, scope);
-    expect(listSessionReactions(destination, { sessionId: "session-a" })).toEqual({
+    expect(await listSessionReactions(destination, { sessionId: "session-a" })).toEqual({
       "message-a": [{ emoji: "👍", count: 1, identities: [{ id: "alice", label: "Alice" }] }],
     });
   });

@@ -67,6 +67,8 @@ type OpenClawPluginToolContextBase = {
   senderIsOwner?: boolean;
   /** Host-resolved memory partition for this turn. Providers must not reconstruct it. */
   memoryAudience?: MemoryAudience;
+  /** Stable identity for one provider-owned pre-compaction flush cycle. */
+  memoryFlush?: { flushId: string };
   /** Rejects a retained audience after any captured session incarnation changes. */
   assertMemoryAudienceCurrent?: () => void;
   /** Live host-bound authority. Recheck inside the final synchronous effect/write guard. */
@@ -107,6 +109,8 @@ export type OpenClawPluginToolOptions = {
   name?: string;
   names?: string[];
   optional?: boolean;
+  /** False: independent; execute: pure factory with workspace use; true/omitted: factory may use it. */
+  workspaceAccess?: boolean | "execute";
 };
 
 export type OpenClawPluginHookOptions = {

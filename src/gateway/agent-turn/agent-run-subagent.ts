@@ -1,5 +1,6 @@
 /** Native subagent registration and paused-run adoption precede Gateway acceptance. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { readAcpSessionMetaForEntries } from "../../acp/runtime/session-meta-readonly.js";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import {
   readFollowupRequest,
@@ -10,6 +11,7 @@ import type {
   FollowupCompletionOwner,
   FollowupSuccessor,
 } from "../../agents/subagents/completion/session-followup-completion.types.js";
+import { resolveSubagentChildAuthority } from "../../agents/subagents/registry/subagent-child-owner-match.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry-read.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -29,7 +31,7 @@ export async function prepareGatewaySubagentRun(params: {
   cfg: OpenClawConfig;
   client: AgentTurnPrincipal | null;
   resolvedSessionKey?: string;
-  activeSessionAgentId?: string;
+  activeSessionAgentId: string;
   inputProvenance?: InputProvenance;
   sessionEntry?: SessionEntry;
   request: Pick<AgentRunRequest, "message">;
@@ -134,19 +136,25 @@ export async function prepareGatewaySubagentRun(params: {
       });
     }
   }
-  return {
-    pluginSubagent,
-    // Operator follow-ups may continue a child; inter-session delivery retains its own owner.
-    reactivateSubagent: Boolean(
-      sessionKey &&
-      !params.isOneShotModelRun &&
-      !interSession &&
-      !pluginSubagent &&
-      internalOwner !== "native_subagent" &&
-      !params.sessionEntry?.acp &&
-      !isAcpSessionKey(sessionKey),
-    ),
-  };
+  // Operator follow-ups may continue a child; inter-session delivery retains its own owner.
+  const reactivateSubagent = Boolean(
+    sessionKey &&
+    !params.isOneShotModelRun &&
+    !interSession &&
+    !pluginSubagent &&
+    internalOwner !== "native_subagent" &&
+    !isAcpSessionKey(sessionKey),
+  );
+  if (!reactivateSubagent || !sessionKey) {
+    return { pluginSubagent, reactivateSubagent: false };
+  }
+  const entry = params.assertResumeAdmissionCurrent() ?? params.sessionEntry;
+  const [acpMeta] = await readAcpSessionMetaForEntries({
+    cfg: params.cfg,
+    entries: [{ agentId: params.activeSessionAgentId, sessionKey, entry }],
+  });
+  params.assertResumeAdmissionCurrent();
+  return { pluginSubagent, reactivateSubagent: acpMeta == null };
 }
 
 /** Rejection may settle only the exact physical execution already adopted by this admission. */
@@ -212,13 +220,18 @@ export function resolveRegisteredSubagentTimeoutSeconds(params: {
   const registeredRun = params.sessionKey
     ? getLatestLiveSubagentRunByChildSessionKey(params.sessionKey, undefined, params.agentId)
     : undefined;
-  const registeredSession = registeredRun?.childSessionIdentity;
+  const authority = registeredRun
+    ? resolveSubagentChildAuthority(registeredRun, params.admittedSessionEntry)
+    : undefined;
   // Admission may adopt a replacement; retained rows must match its final identity.
   const inherits =
     registeredRun &&
-    !registeredRun.execution.suppressSessionEffects &&
-    registeredSession?.sessionId === params.admittedSessionId &&
-    registeredSession.sessionId === params.admittedSessionEntry?.sessionId &&
-    registeredSession.lifecycleRevision === params.admittedSessionEntry.lifecycleRevision;
+    (!registeredRun.execution.suppressSessionEffects ||
+      authority?.status === "legacy-unverified") &&
+    params.admittedSessionEntry?.sessionId === params.admittedSessionId &&
+    registeredRun.childSessionIdentity?.sessionId === params.admittedSessionId &&
+    registeredRun.childSessionIdentity?.lifecycleRevision ===
+      params.admittedSessionEntry?.lifecycleRevision &&
+    authority?.status !== "mismatch";
   return inherits ? (registeredRun.runTimeoutSeconds ?? 0) : undefined;
 }

@@ -34,15 +34,14 @@ export async function runPluginUpdateWithClawHubLease<T>(params: {
     return await withClawPackageLifecycleLease(
       { kind: "plugin", source: "clawhub", ref: params.clawhubPackage },
       async () => {
-        params.beforePersistentEffect?.();
-        markClawPackageIndependentlyOwned({
+        await markClawPackageIndependentlyOwned({
           kind: "plugin",
           source: "clawhub",
           ref: params.clawhubPackage!,
         });
+        params.beforePersistentEffect?.();
         return await params.run();
       },
-      { required: true },
     );
   } catch (error) {
     return {

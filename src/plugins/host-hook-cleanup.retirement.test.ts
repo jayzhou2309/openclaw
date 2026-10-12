@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
@@ -19,6 +23,26 @@ import {
 import { createPluginRecord } from "./status.test-helpers.js";
 
 describe("plugin retirement session-store ownership", () => {
+  it("retires in-memory resources without preparing persistent config", async () => {
+    await withOpenClawTestState({ label: "plugin-retirement-no-persistent-state" }, async () => {
+      const registry = createEmptyPluginRegistry();
+      const cleanup = vi.fn();
+      registry.runtimeLifecycles.push({
+        pluginId: "fixture",
+        source: "fixture",
+        lifecycle: { id: "fixture", cleanup },
+      });
+      clearRuntimeConfigSnapshot();
+      const result = await createPluginHostRegistryRetirement({
+        previousRegistry: registry,
+        skipPersistentSessionState: true,
+      })();
+      expect(result.failures).toEqual([]);
+      expect(cleanup).toHaveBeenCalledOnce();
+      expect(getRuntimeConfigSnapshot()).toBeNull();
+    });
+  });
+
   it.each(["replace", "direct", "clear-command", "explicit"] as const)(
     "keeps the retiring configuration across admitted work (%s)",
     async (mode) => {
@@ -26,7 +50,7 @@ describe("plugin retirement session-store ownership", () => {
         const oldPath = state.path("old-custom", "sessions.json");
         const newPath = state.path("new-custom", "sessions.json");
         const cfg: OpenClawConfig = {
-          agents: { list: [{ id: "main", default: true }] },
+          agents: { entries: { main: {} } },
           session: { store: oldPath },
         };
         setRuntimeConfigSnapshot(cfg, cfg);
@@ -82,6 +106,7 @@ describe("plugin retirement session-store ownership", () => {
           release.resolve();
           await Promise.all([call, retirement]);
           expect(loadSessionEntry(scope(oldPath))?.pluginExtensions).toEqual({
+            ...(mode === "clear-command" ? { fixture: { value: "old" } } : {}),
             other: { value: "preserve" },
           });
           expect(loadSessionEntry(scope(newPath))?.pluginExtensions).toEqual({

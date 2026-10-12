@@ -33,12 +33,29 @@ background services, plus the SDK helpers those surfaces depend on. Part of the
 | `api.registerTextTransforms(transforms)`          | Plugin-owned prompt/message compatibility text rewrites                |
 | `api.registerConfigMigration(migrate)`            | Lightweight config migration run before plugin runtime loads           |
 | `api.registerMigrationProvider(provider)`         | Importer for `openclaw migrate`                                        |
-| `api.registerAutoEnableProbe(probe)`              | Config probe that can auto-enable this plugin                          |
+| `api.registerAutoEnableProbe(probe)`              | Config check that can auto-enable this plugin                          |
 | `api.registerReload(registration)`                | Restart/hot/noop config-prefix policy for reload handling              |
 | `api.registerNodeInvokePolicy(policy)`            | Allowlist/approval policy for node-invoked commands                    |
 | `api.registerSecurityAuditCollector(collector)`   | Findings collector for `openclaw security audit`                       |
 
 Gateway methods default to `profileAccess: "required"`, so authenticated-profile verification fails closed before plugin dispatch. Set `profileAccess: "independent"` only for an audited method that neither reads nor mutates durable user or session state. Operator scope remains a separate authorization requirement.
+
+Read-only methods may opt into WebSocket response sharing with registration options
+`shareKey(caller, params)`, `shareInvalidationEvents`, and `shareMaxAgeMs`.
+Return `null` when a request cannot share. The key must include every caller and
+parameter dependency, including identity, scopes, capabilities, agent, and account
+selection. A successful result must be immutable after publication. The dispatcher
+checks each caller's authority and shares only the result and serialized payload;
+errors are not cached. Listed broadcasts invalidate pending and completed entries.
+The default absolute ceiling is one second and the host caps it at five seconds.
+The Gateway retains at most 16 responses across all methods, each at most 1 MiB,
+and clears them when its method registry is replaced. Expiry and invalidation
+release waiting callers to perform their own reads instead of repeatedly joining
+retired work.
+Only opt in when the method's authorization is fully covered by dispatch; a
+handler that performs additional caller-specific authorization or nested requests
+must remain request-local. Omit these options for mutations, subscriptions, and
+connection-bound providers.
 
 ### File-watch capacity errors
 
@@ -105,6 +122,13 @@ update warning; callers using only the existing synchronous guard remain support
 
 ### SQLite write admission
 
+For runtime storage, use the owning domain's awaited operations or
+`openOpenClawAgentSqliteWorkerStoreV2`; see
+[native SQLite migration](/plugins/sdk-migration/how-to-migrate#replace-native-sqlite-runtime-writes).
+The following `sqlite-runtime` callback helper is deprecated compatibility until
+the next Plugin SDK major. Awaiting admission does not move its SQL off the
+caller's thread.
+
 `runSqliteImmediateTransaction(db, prepare, options?)` from
 `openclaw/plugin-sdk/sqlite-runtime` waits for write admission without blocking
 the event loop. Its asynchronous `prepare` function may run more than once when
@@ -124,11 +148,43 @@ same transaction diagnostics as `runSqliteImmediateTransactionSync`. Keep the
 database handle and its owning operation alive until the returned promise settles.
 The callback and SQLite calls still run synchronously on the caller's thread.
 
-For a repeated fixed query, `prepareSqliteQuerySync(db, build)` compiles its
+Inside a worker backend, `prepareSqliteQuerySync(db, build)` from
+`openclaw/plugin-sdk/sqlite-worker-runtime` compiles a repeated fixed query's
 Kysely shape once and binds fresh parameters on each call. It uses the normal
 synchronous executor and the connection's bounded statement cache when enabled.
 Keep the prepared function with its database owner and discard it when closing
 the connection; transaction callbacks must remain synchronous.
+
+### Database engine adapters (experimental)
+
+Engine-aware stores use two narrow SDK entrypoints. Keep them on their owning
+side of the host/worker boundary:
+
+- `openclaw/plugin-sdk/database-engine-runtime` is host-only. Await
+  `resolveDatabaseEngineInput(config)` to resolve the configured connection secret,
+  then carry the resulting `DatabaseEngineInput` through the existing worker
+  input transport. `openEngineWorkerStore` opens the worker store and observes
+  its connection open, execute, and close requests. `runEngineStoreOperation`
+  wraps host-side store operations, preserving write admission,
+  current-authority checks, and worker-request observation without making the
+  store facade branch on the engine. This
+  entrypoint does not load the synchronous PostgreSQL bridge.
+- `openclaw/plugin-sdk/database-engine-worker-runtime` is worker/admission-only.
+  Call `openEngineStore` with the physical SQLite handle, `StoreSchema`, resolved
+  input, and the store's existing SQLite open and anchor-preparation callbacks.
+  `StoreSchema` declares the store ID, version, canonical SQLite DDL, and optional
+  generated PostgreSQL DDL. The owner selects the adapter, admits the physical
+  store once, and returns an `EngineConnection`. Use `runEngineStoreReadSnapshot`
+  for snapshot reads. `runEngineWorkerWrite` selects the extra PostgreSQL worker
+  envelope using the kernel's transaction callback; SQLite executes the operation
+  directly. Keep the kernel's own write-transaction API atomic on both engines.
+
+The worker entrypoint exports the `EngineConnection`, `StoreSchema`, and
+`DatabaseEngineAdapter` types; it does not export a PostgreSQL connection
+constructor. Open physical connections through `openEngineStore`. A store
+without registered PostgreSQL DDL stays on SQLite; a selected PostgreSQL store that
+fails admission never falls back. See [Database engines](/reference/database-engines)
+for configuration, supported stores, durability, anchors, and observation events.
 
 ### Worker task admission
 
@@ -137,6 +193,11 @@ computation workers for bundled and separately published official plugins.
 Inside those workers, import `serveWorkerTasks` and the
 `WorkerTaskControl` type from `openclaw/plugin-sdk/worker-task-server` to avoid
 loading the host process and pool runtime. Both paths use the same task protocol.
+
+The shared implementation lives in the private `@openclaw/worker-runtime`
+workspace package. Plugins keep using these public SDK entrypoints; OpenClaw's
+host adapter supplies worker creation, resource cleanup, and process accounting
+to the same scheduler.
 
 The older serving exports in `process-runtime` remain for released official
 plugins. Bundled workers use `worker-task-server`; remove the older exports only
@@ -161,6 +222,25 @@ For stateless computation, `sharedCompute: true` also shares an aggregate
 128-task/256-MiB admission budget and CPU execution capacity with participating
 pools in the same isolate. Dedicated ordered pools retain their own execution
 capacity and still enforce their individual admission limits.
+
+For interactive tasks waiting on a host response, queue pressure can request a
+cooperative checkpoint through `yieldSignal` so queued work can run. The host
+operation retains its own lifetime. Internal `openclaw.worker.task` diagnostics
+include `hostWaitMs` alongside the existing timing fields; host wait is included
+in `runMs`, not added to it. This field is diagnostic data, not a public config
+option.
+
+The task's `timeoutMs` includes host callbacks. Expiry aborts the callback's
+`signal` and retires the worker; a host response can shorten the remaining
+deadline but cannot renew it. An owner that already enforces a separate,
+approval-aware host deadline can set `hostTimeout: "owner"` to suspend the pool
+clock during host callbacks and supply its remaining budget in the response.
+Accepted host effects still need their owner's settlement and cleanup receipts.
+Forward the callback signal into queued reads, writes, locks, and network requests;
+checking it only after an `await` leaves canceled work in the queue. A host-wait
+timeout emits `WORKER_HOST_CALLBACK_TIMEOUT` with the callback's operation name
+(a string request or its `kind`/`type` field), without logging its payload.
+Requests without a label identify their worker entrypoint instead.
 
 Pass static Node.js Worker settings in `workerOptions`. For per-worker settings,
 `prepareWorker()` runs once per Worker creation attempt and returns
@@ -199,6 +279,14 @@ it cannot safely interrupt a stuck native call. Native sections must therefore
 have bounded inputs and must not wait for network, user input, or unbounded work.
 
 ### SQLite worker stores
+
+For canonical agent databases, use `openOpenClawAgentSqliteWorkerStoreV2` with
+`{ version: 2, assertCurrent }`. It retains the existing agent execution owner,
+provides explicit worker-owned `prepare()` for creation, and checks live
+authority at transaction and commit admission. `executeExisting` leaves missing
+storage absent. See the [migration example](/plugins/sdk-migration/how-to-migrate#replace-native-sqlite-runtime-writes).
+Released raw native callbacks retain their ordering and warn on use until their
+removal in the next Plugin SDK major.
 
 Use `openSqliteWorkerStore<Operations>` from
 `openclaw/plugin-sdk/sqlite-runtime` to move a feature's SQLite lifecycle off the
@@ -344,12 +432,12 @@ verification and bounded body read.
 
 For bundled callback setup and Doctor guidance, `classifyGatewayProbePath(pathname)`
 from the private `openclaw/plugin-sdk/gateway-config-runtime` facade identifies
-Gateway probe paths without loading webhook execution code. This facade is not
+Gateway check paths without loading webhook execution code. This facade is not
 part of the third-party SDK. Normalize callback input
 through `new URL(rawPath, "http://localhost").pathname` first. Results `live`,
-`ready`, and `startup` identify exact paths owned by probes on the Gateway port;
+`ready`, and `startup` identify exact paths owned by checks on the Gateway port;
 choose a different webhook path. Results `namespace` and `outside` do not identify
-an exact probe route. The same private facade exports `resolvePluginRoutePathContext`
+an exact check route. The same private facade exports `resolvePluginRoutePathContext`
 and `isProtectedPluginRoutePathFromContext` for canonical protected-path checks.
 If the callback falls under a protected namespace, choose the channel's safe default
 path before moving the external callback or reverse proxy to the Gateway port.
@@ -374,7 +462,7 @@ need an unambiguous account path or authentication identity.
 The optional registration metadata `health: { path, contentType? }` preserves a
 shipped exact raw health target: `200 ok` for ordinary HTTP methods, with Node's
 HEAD behavior and only the optional Content-Type. It applies only on the legacy
-port, including during route handoff, and does not expose Gateway probe details.
+port, including during route handoff, and does not expose Gateway check details.
 Legacy ports retain native Node expectation handling, Upgrade fallback, header
 limits and timeout defaults. A shipped timeout profile can be preserved with
 `timeouts: { headers, request, socket }` in milliseconds. These are plugin
@@ -408,6 +496,15 @@ when the current process cannot decide environment-dependent eligibility. Omit
 the field only when the contract is not implemented. The host owns
 prior-operation detection, pin creation, and completion; the normalizer returns
 eligibility without opening listeners or creating implicit endpoints.
+
+Retained host config Doctor artifacts also expose `normalizeHistoricalWebhookConfig`.
+It reuses the listener-only migration and returns its config changes, warnings,
+and `historicalWebhookAccountIds`, without applying unrelated compatibility repairs.
+During an update rehearsal, the host can use this operation for a missing plugin
+whose installation is deferred. Selected installed or custom owners still shadow
+the host artifact, and this operation does not complete deferred plugin inspection.
+External plugins are not required to implement this host fallback.
+
 Automatic pins belong to existing accounts, including `accounts.default`, so
 accounts added later do not inherit them. Doctor backs up the config before
 persisting pins with `meta.migrations.webhookListeners`. The marker records exact

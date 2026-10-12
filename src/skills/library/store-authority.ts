@@ -1,13 +1,22 @@
-import type { DatabaseSync } from "node:sqlite";
-import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
-import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import type { OpenClawStateDatabaseReadAdmission } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { registerOpenClawStateDatabaseLifecycleListener } from "../../state/openclaw-state-db-cache.js";
-import { captureOpenClawStateReadContext } from "../../state/openclaw-state-worker-context.js";
-import { SkillLibraryError } from "./errors.js";
+import { readUserProfileVersion } from "../../state/user-profile-events.js";
+import { SkillLibraryError } from "../skill-library-error.js";
+import type { SkillLibraryReadOutput } from "./read.contract.js";
 
-type Store = { path: string; revision: object; pending: number };
+type CachedReply = SkillLibraryReadOutput & { ok: true };
+type CachedRead = {
+  value: CachedReply;
+  profileVersion: number;
+  profilesCurrent: () => boolean;
+};
+type Store = {
+  path: string;
+  revision: object;
+  pending: number;
+  reads: Map<string, CachedRead>;
+};
 const stores = resolveGlobalMap<string, Store>(
   Symbol.for("openclaw.skillLibraryAuthority"),
   "close-and-restart",
@@ -25,16 +34,17 @@ function owner(admission: OpenClawStateDatabaseReadAdmission) {
   admission.assertCurrent();
   let store = stores.get(admission.coordinationKey);
   if (!store) {
-    store = { path: admission.identity.canonicalPath, revision: {}, pending: 0 };
+    store = { path: admission.identity.canonicalPath, revision: {}, pending: 0, reads: new Map() };
     stores.set(admission.coordinationKey, store);
   }
   return store;
 }
 
-/** No rows are cached: a prepared selection is valid only through its writer's committed revision. */
+/** Read facts and prepared selections share the owning writer's committed revision. */
 export function captureSkillLibraryAuthorityRead(admission: OpenClawStateDatabaseReadAdmission) {
   const store = owner(admission);
   const revision = store.revision;
+  const profileVersion = readUserProfileVersion();
   const assertCurrent = () => {
     admission.assertCurrent();
     if (
@@ -49,36 +59,53 @@ export function captureSkillLibraryAuthorityRead(admission: OpenClawStateDatabas
     }
   };
   assertCurrent();
-  return { assertCurrent };
+  return {
+    assertCurrent,
+    read(key: string): CachedReply | undefined {
+      assertCurrent();
+      const cached = store.reads.get(key);
+      if (!cached) {
+        return undefined;
+      }
+      if (cached.profileVersion !== readUserProfileVersion() || !cached.profilesCurrent()) {
+        store.reads.delete(key);
+        return undefined;
+      }
+      return structuredClone(cached.value);
+    },
+    remember(key: string, value: CachedReply, profilesCurrent: () => boolean): void {
+      assertCurrent();
+      if (profileVersion !== readUserProfileVersion()) {
+        return;
+      }
+      // Bound arbitrary query parameters and retain caller-owned result objects.
+      if (store.reads.size >= 128) {
+        store.reads.delete(store.reads.keys().next().value!);
+      }
+      store.reads.set(key, {
+        value: structuredClone(value),
+        profileVersion,
+        profilesCurrent,
+      });
+    },
+  };
 }
 
-/** Native writers fence pending changes; outer COMMIT publishes before observers, rollback preserves eligibility. */
-export function stageSkillLibraryAuthorityChange(db: DatabaseSync) {
-  const location = db.location();
-  if (!location) {
-    throw new Error("Skill library requires its durable database owner");
-  }
-  const store = owner(captureOpenClawStateReadContext(location).admission);
-  if (
-    !stageSqliteTransactionState(db, {
-      stage: () => {
-        store.pending += 1;
-      },
-      commit: () => {
-        store.revision = {};
-        store.pending -= 1;
-      },
-      rollback: () => {
-        store.pending -= 1;
-        try {
-          assertTransactionUsable(db);
-        } catch {
-          // The native owner cannot prove rollback after a lost COMMIT outcome.
-          store.revision = {};
-        }
-      },
-    })
-  ) {
-    throw new Error("Skill library publication requires its native transaction owner");
-  }
+/** Fence before granting COMMIT; publish inside the writer FIFO after native settlement. */
+export function fenceSkillLibraryMutationAuthority(admission: OpenClawStateDatabaseReadAdmission) {
+  const store = owner(admission);
+  store.pending += 1;
+  let settled = false;
+  return (outcome: "committed" | "rolled-back" | "unknown") => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    store.pending -= 1;
+    // Only a confirmed rollback preserves an earlier prepared selection.
+    if (outcome !== "rolled-back") {
+      store.revision = {};
+      store.reads.clear();
+    }
+  };
 }

@@ -1,5 +1,5 @@
 // Snapshots every SQLite database owned by the frozen backup resource inventory.
-import type { Stats } from "node:fs";
+import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
@@ -56,6 +56,12 @@ type SqliteBackupAsset = {
   skippedSourcePaths: Set<string>;
 };
 
+function ignoreMissingSource(error: unknown): undefined {
+  if (!hasErrnoCode(error, "ENOENT")) {
+    throw error;
+  }
+}
+
 function findLegacyAuditBackupStateChange(
   error: unknown,
 ): LegacyAuditBackupStateChangedError | undefined {
@@ -69,7 +75,7 @@ function findLegacyAuditBackupStateChange(
 
 type CanonicalSqliteSource = {
   archiveSourcePath: string;
-  identity: Stats;
+  identity: BigIntStats;
   sourcePath: string;
 } & ({ role: "global" | "quarantine" } | { role: "agent"; agentId: string });
 
@@ -184,11 +190,11 @@ async function planBackupSqliteSources(
   const sources: Array<{
     archiveSourcePath: string;
     path: string;
-    identity: Stats;
+    identity: BigIntStats;
     canonicalSource: CanonicalSqliteSource | undefined;
   }> = [];
   for (const archiveSourcePath of snapshotPaths) {
-    const identity = await fs.stat(archiveSourcePath);
+    const identity = await fs.stat(archiveSourcePath, { bigint: true });
     const owner = inventory.resolveSqliteSource(archiveSourcePath, identity);
     if (!owner || owner.role === "unresolvable-link") {
       throw new Error(`SQLite ownership changed after discovery: ${archiveSourcePath}`);
@@ -239,7 +245,10 @@ export async function createBackupSqliteSnapshotPlan(params: {
     }
     if (
       canonicalSource &&
-      !sameFileIdentity(canonicalSource.identity, await fs.stat(archiveSourcePath))
+      !sameFileIdentity(
+        canonicalSource.identity,
+        await fs.stat(archiveSourcePath, { bigint: true }),
+      )
     ) {
       throw new Error(`Canonical SQLite path changed after discovery: ${archiveSourcePath}`);
     }
@@ -328,16 +337,13 @@ export async function createBackupSqliteSnapshotPlan(params: {
     ...process.env,
     OPENCLAW_STATE_DIR: params.resources.stateDir,
   });
-  const globalEntry = await fs.lstat(globalPath).catch((error: unknown) => {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  });
-  let globalIdentity: Stats | undefined;
+  const globalEntry = await fs.lstat(globalPath, { bigint: true }).catch(ignoreMissingSource);
+  let globalIdentity: BigIntStats | undefined;
   let globalGroup: BackupSqliteSourceGroup | undefined;
   if (globalEntry) {
-    globalIdentity = globalEntry.isSymbolicLink() ? await fs.stat(globalPath) : globalEntry;
+    globalIdentity = globalEntry.isSymbolicLink()
+      ? await fs.stat(globalPath, { bigint: true })
+      : globalEntry;
     if (!globalIdentity.isFile()) {
       throw new Error(
         `Canonical global SQLite path must be a regular file or symlink to one: ${globalPath}`,
@@ -363,12 +369,7 @@ export async function createBackupSqliteSnapshotPlan(params: {
     await captureSource(globalPath, globalGroup, globalSource);
   } else {
     for (const sidecar of resolveSqliteDatabaseFilePaths(globalPath).slice(1)) {
-      const exists = await fs.lstat(sidecar).catch((error: unknown) => {
-        if (hasErrnoCode(error, "ENOENT")) {
-          return undefined;
-        }
-        throw error;
-      });
+      const exists = await fs.lstat(sidecar).catch(ignoreMissingSource);
       if (exists) {
         throw new Error(
           `Canonical global SQLite database is missing but a sidecar remains: ${sidecar}`,
@@ -405,12 +406,9 @@ export async function createBackupSqliteSnapshotPlan(params: {
       })),
   ];
   for (const { discoveredPath, ...database } of candidates) {
-    const identity = await fs.stat(database.sourcePath).catch((error: unknown) => {
-      if (hasErrnoCode(error, "ENOENT")) {
-        return undefined;
-      }
-      throw error;
-    });
+    const identity = await fs
+      .stat(database.sourcePath, { bigint: true })
+      .catch(ignoreMissingSource);
     if (identity && !identity.isFile()) {
       throw new Error(`Core SQLite path must resolve to a regular file: ${database.sourcePath}`);
     }
@@ -447,7 +445,10 @@ export async function createBackupSqliteSnapshotPlan(params: {
     await assertBackupSqliteSourceGroup(globalGroup);
   }
   for (const source of coreDatabases) {
-    if (source.identity && !sameFileIdentity(source.identity, await fs.stat(source.sourcePath))) {
+    if (
+      source.identity &&
+      !sameFileIdentity(source.identity, await fs.stat(source.sourcePath, { bigint: true }))
+    ) {
       throw new Error(`Canonical SQLite path changed after discovery: ${source.sourcePath}`);
     }
   }

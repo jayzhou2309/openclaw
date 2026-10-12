@@ -2,8 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
 import { registerAgentWorkspaceAccess } from "../agents/workspace-access.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as sessions from "../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
@@ -83,6 +85,7 @@ describe("narrow session read owners", () => {
         reader.connect.scopes = ["operator.sessions.read"];
         const owner = roleClient("view", "row-owner");
         const cfg = roles ? rolePolicyConfig() : {};
+        setRuntimeConfigSnapshot(cfg);
         await state.writeConfig(cfg);
         const subscribers = createSessionMessageSubscriberRegistry();
         const context = await createHistoryReadContext({
@@ -187,6 +190,7 @@ describe("narrow session read owners", () => {
         };
         client.connect.scopes = ["operator.sessions.read"];
         const cfg = rolePolicyConfig();
+        setRuntimeConfigSnapshot(cfg);
         const entry = {
           sessionId: "original",
           lifecycleRevision: "original",
@@ -274,6 +278,7 @@ describe("narrow session read owners", () => {
         const client = roleClient("view", "metadata-reader");
         const owner = roleClient("view", "metadata-owner");
         const cfg = rolePolicyConfig();
+        setRuntimeConfigSnapshot(cfg);
         await state.writeConfig(cfg);
         const entry = {
           sessionId: "metadata-session",
@@ -377,6 +382,7 @@ describe("narrow session read owners", () => {
   it("separates a trusted solo operator from its sharing exemption", async () => {
     const method = "sessions.files.get";
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const client = sharingPolicyClient({
         user: GATEWAY_OWNER_PROFILE_ID,
         scopes: ["operator.sessions.read"],
@@ -428,6 +434,8 @@ describe("narrow session read owners", () => {
       const owner = roleClient("view", "scoped-owner");
       const cfg = rolePolicyConfig();
       cfg.gateway!.roles!.definitions.view!.scopes.push("operator.admin");
+      setRuntimeConfigSnapshot(cfg);
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
       const io = prepareRead(method, async () => {});
       const request = async () => {
@@ -487,6 +495,7 @@ describe("narrow session read owners", () => {
       const reader = roleClient("view", "retained-reader");
       reader.connect.scopes = ["operator.sessions.read"];
       const cfg = rolePolicyConfig();
+      setRuntimeConfigSnapshot(cfg);
       const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
       for (const changed of [
         "metadata-no-revision",
@@ -571,6 +580,7 @@ describe("narrow session read owners", () => {
       const reader = roleClient("view", "remote-reader");
       reader.connect.scopes = ["operator.sessions.read"];
       const cfg = rolePolicyConfig();
+      setRuntimeConfigSnapshot(cfg);
       const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
       for (const revoke of [false, true]) {
         const entry = {
@@ -642,45 +652,42 @@ describe("narrow session read owners", () => {
     });
   });
 
-  it.each(["sessions.files.get", "sessions.branches.list"] as const)(
-    "%s keeps the missing-row contract without reading a workspace",
-    async (method) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const reader = roleClient("view", "missing-reader");
-        reader.connect.scopes = ["operator.sessions.read"];
-        const io = prepareRead(method, async () => {});
-        const respond = vi.fn();
-        await dispatchRead(method, {
-          client: reader,
-          context: createDirectChatContext({ getRuntimeConfig: rolePolicyConfig }),
-          respond,
-        });
-        expect(io).not.toHaveBeenCalled();
-        expect(respond.mock.calls[0]?.[0]).toBe(method === "sessions.branches.list");
+  it.each([
+    ["sessions.files.get", "narrow"],
+    ["sessions.branches.list", "narrow"],
+    ["sessions.files.get", "solo"],
+    ["sessions.files.get", "internal"],
+  ] as const)("%s keeps missing-row access for %s callers", async (method, identity) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = identity === "narrow" ? rolePolicyConfig() : {};
+      setRuntimeConfigSnapshot(cfg);
+      const client =
+        identity === "internal"
+          ? null
+          : identity === "solo"
+            ? sharingPolicyClient({ user: GATEWAY_OWNER_PROFILE_ID, scopes: ["operator.read"] })
+            : roleClient("view", "missing-reader");
+      if (identity === "narrow" && client) {
+        client.connect.scopes = ["operator.sessions.read"];
+      }
+      const io = prepareRead(method, async () => {});
+      const respond = vi.fn();
+      await dispatchRead(method, {
+        client,
+        context: createDirectChatContext({
+          getRuntimeConfig: () => cfg,
+        }),
+        respond,
+      });
+      expect(io).toHaveBeenCalledTimes(identity === "narrow" ? 0 : 1);
+      expect(respond.mock.calls[0]?.[0]).toBe(
+        identity !== "narrow" || method === "sessions.branches.list",
+      );
+      if (identity === "narrow") {
         expect(respond.mock.calls[0]?.[1]).toEqual(
           method === "sessions.branches.list" ? { branches: [] } : undefined,
         );
-      });
-    },
-  );
-
-  it("preserves canonical solo-owner and internal browsing without a session row", async () => {
-    const method = "sessions.files.get";
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const io = prepareRead(method, async () => {});
-      for (const client of [
-        null,
-        sharingPolicyClient({ user: GATEWAY_OWNER_PROFILE_ID, scopes: ["operator.read"] }),
-      ]) {
-        const respond = vi.fn();
-        await dispatchRead(method, {
-          client,
-          context: createDirectChatContext(),
-          respond,
-        });
-        expect(respond.mock.calls[0]?.[0]).toBe(true);
       }
-      expect(io).toHaveBeenCalledTimes(2);
     });
   });
 });

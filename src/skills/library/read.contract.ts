@@ -1,4 +1,5 @@
 import type {
+  SkillLibraryEntry,
   SkillLibrarySelection,
   SkillsLibraryActivateParams,
   SkillsLibraryListParams,
@@ -6,6 +7,7 @@ import type {
   SkillsLibraryReadResult,
 } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 
 export type SkillLibraryWorkerAuthority = {
   profileId?: string;
@@ -14,6 +16,9 @@ export type SkillLibraryWorkerAuthority = {
   config: OpenClawConfig;
 };
 export type SkillLibraryReadQueries = {
+  profile: { input: undefined; output: string };
+  entry: { input: { skillId: string; write?: boolean }; output: SkillLibraryEntry };
+  upload: { input: { uploadId: string }; output: StateDatabase["skill_library_uploads"] };
   presentation: {
     input: undefined;
     output: Pick<
@@ -27,6 +32,13 @@ export type SkillLibraryReadQueries = {
     output: Pick<SkillsLibraryReadResult, "entry" | "revisions"> & { manifestJson: string };
   };
   seed: { input: undefined; output: SkillLibrarySelection[] };
+  session: {
+    input: undefined;
+    output: {
+      selections: SkillLibrarySelection[];
+      presentation: SkillLibraryReadQueries["presentation"]["output"];
+    };
+  };
   change: {
     input: { current: readonly SkillLibrarySelection[]; params: SkillsLibraryActivateParams };
     output: SkillLibrarySelection[];
@@ -51,6 +63,3 @@ export type SkillLibraryReadOutput = {
     profileIds: string[];
   };
 }[keyof SkillLibraryReadQueries];
-export type SkillLibraryReadOperations = {
-  "skillLibrary.read": { input: SkillLibraryReadInput; output: SkillLibraryReadOutput };
-};
