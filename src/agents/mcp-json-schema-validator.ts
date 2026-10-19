@@ -12,6 +12,7 @@ import { normalizeJsonSchemaForTypeBox } from "@openclaw/normalization-core/json
 import fastUri from "fast-uri";
 import { Compile } from "typebox/compile";
 import { toErrorObject } from "../infra/errors.js";
+import { logDebug } from "../logger.js";
 import { findJsonSchemaShapeError } from "../shared/json-schema-defaults.js";
 
 const DRAFT_2020_12_SCHEMA = "https://json-schema.org/draft/2020-12/schema";
@@ -34,12 +35,19 @@ function formatTypeBoxErrors(errors: Array<{ instancePath?: string; message?: st
 /** MCP SDK validator with draft-2020-12 support for external tool schemas. */
 export function createMcpJsonSchemaValidator(): jsonSchemaValidator {
   // Preserve the legacy draft-07 default and the workspace URI resolver; the SDK bundles its own.
+  // Remote servers routinely publish vendor formats (google-duration, uint) that Ajv ignores;
+  // its notice for each one belongs in debug logs, not a console warning on every catalog load.
   const ajv = new Ajv({
     strict: false,
     validateFormats: true,
     validateSchema: false,
     allErrors: true,
     uriResolver: fastUri,
+    logger: {
+      log: console.log,
+      warn: (...args: unknown[]) => logDebug(`mcp schema: ${args.join(" ")}`),
+      error: console.error,
+    },
   });
   addFormats(ajv);
   const defaultValidator = new AjvJsonSchemaValidator(ajv);
