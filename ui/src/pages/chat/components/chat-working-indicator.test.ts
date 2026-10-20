@@ -1,5 +1,5 @@
 import { createComponent, createSignal, flush } from "solid-js";
-import { describe, expect, it, onTestFinished } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { selectWorkingClawSurprise } from "./chat-working-indicator-surprise.ts";
@@ -42,7 +42,23 @@ function findRenderKey(wantSurprise: boolean): string {
 }
 
 describe("ChatWorkingIndicator", () => {
-  it("promotes child activity above supporting totals and restores the standalone glyph", () => {
+  it("pops in for new work but continues a claw that another one just handed off", () => {
+    const now = vi.spyOn(performance, "now").mockReturnValue(10_000);
+    const part = { kind: "reading-indicator", key: "handoff", startedAt: 1 } as const;
+    const isContinued = (container: Element) =>
+      container
+        .querySelector(".chat-working-indicator")
+        ?.classList.contains("chat-working-indicator--continued");
+    const preview = mountSolid(() => createComponent(ChatWorkingIndicator, { part, options: {} }));
+    flush();
+    expect(isContinued(preview.container)).toBe(false);
+    preview.unmount();
+    now.mockReturnValue(10_200);
+    const chat = mountIndicator(part, {});
+    expect(isContinued(chat.container)).toBe(true);
+  });
+
+  it("promotes child activity above supporting totals and restores the standalone glyph", async () => {
     const { container, draw } = mountIndicator(
       { kind: "reading-indicator", key: "task-first", startedAt: 1 },
       { outputTokens: 4_100 },
@@ -62,6 +78,8 @@ describe("ChatWorkingIndicator", () => {
         ],
       },
     });
+    await vi.dynamicImportSettled();
+    flush();
     const task = container.querySelector(".chat-subagent-activity");
     const status = container.querySelector(".chat-working-indicator");
     expect(task).not.toBeNull();

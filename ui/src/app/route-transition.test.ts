@@ -44,6 +44,7 @@ describe("navigateWithRouteTransition", () => {
 
     const transition = navigateWithRouteTransition({
       document: test.document,
+      getOutlet: () => test.outlet,
       router: test.router,
       from: "new-session",
       to: "chat",
@@ -73,6 +74,7 @@ describe("navigateWithRouteTransition", () => {
     await expect(
       navigateWithRouteTransition({
         document: test.document,
+        getOutlet: () => test.outlet,
         router: test.router,
         from: "new-session",
         to: "chat",
@@ -94,6 +96,7 @@ describe("navigateWithRouteTransition", () => {
 
     await navigateWithRouteTransition({
       document: test.document,
+      getOutlet: () => test.outlet,
       router: test.router,
       from,
       to,
@@ -105,11 +108,35 @@ describe("navigateWithRouteTransition", () => {
     expect(test.animate).not.toHaveBeenCalled();
   });
 
+  it("cancels a running entrance when another route takes over", async () => {
+    const cancel = vi.fn();
+    const running: Partial<Animation> = { finished: new Promise(() => {}), cancel };
+    const animate = vi.fn(() => running as Animation);
+    const test = testDocumentWithOutlet(animate);
+    const transition = navigateWithRouteTransition({
+      document: test.document,
+      getOutlet: () => test.outlet,
+      router: test.router,
+      from: "new-session",
+      to: "chat",
+      navigate: async () => undefined,
+      prefersReducedMotion: false,
+    });
+    document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT));
+    await vi.waitFor(() => expect(animate).toHaveBeenCalledOnce());
+
+    await test.router.navigate("about", undefined);
+    await transition;
+
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
   it("waits for the chat route without animating when motion is reduced", async () => {
     const test = testDocumentWithOutlet();
     const navigate = vi.fn(async () => undefined);
     const transition = navigateWithRouteTransition({
       document: test.document,
+      getOutlet: () => test.outlet,
       router: test.router,
       from: "new-session",
       to: "chat",
@@ -139,6 +166,7 @@ describe("navigateWithRouteTransition", () => {
     );
     const transition = navigateWithRouteTransition({
       document,
+      getOutlet: () => test.outlet,
       router: test.router,
       from: "new-session",
       to: "chat",

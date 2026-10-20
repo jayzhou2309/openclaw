@@ -569,6 +569,8 @@ it("settles verified retained sources when a historical transcript stays deferre
     const directory = path.dirname(storePath);
     const bootTranscript = path.join(directory, "boot-2026-06-12_01-38-43-539-a2a5aeed.jsonl");
     writeTranscript(bootTranscript, "legacy-boot", "boot-message", "boot");
+    // Filename mismatches now import by header identity; an unknown historical record stays deferred.
+    fs.appendFileSync(bootTranscript, JSON.stringify({ type: "future_history_record" }) + "\n");
     const bootBytes = fs.readFileSync(bootTranscript);
     const entries = JSON.parse(fs.readFileSync(storePath, "utf8"));
     entries["agent:main:boot"] = {
@@ -583,7 +585,7 @@ it("settles verified retained sources when a historical transcript stays deferre
     fs.renameSync(storePath, `${storePath}.preserved`);
     const deferredWarning = {
       code: "historical_transcript_deferred",
-      message: `${bootTranscript}: Error: Primary transcript header does not match its original filename`,
+      message: `${bootTranscript}: Error: Unrecognized primary transcript record`,
     };
     await withDoctorSqliteMaintenanceLock({
       env: state.env,

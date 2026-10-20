@@ -146,8 +146,6 @@ export function reconcileWaitingApprovalsFromSnapshot(
       continue;
     }
     waiting.set(approval.id, {
-      approvalId: approval.id,
-      toolCallId: null,
       runId,
     });
     changed = true;
@@ -192,7 +190,6 @@ function setCompactionStatus(
       }
       host.compactionStatus = null;
       host.compactionClearTimer = null;
-      host.requestUpdate?.();
     }, COMPACTION_ACTIVE_STALE_TIMEOUT_MS);
   }
 }
@@ -339,7 +336,6 @@ function handleLifecycleFallbackEvent(host: ToolStreamHost, payload: AgentEventP
   host.fallbackClearTimer = window.setTimeout(() => {
     host.fallbackStatus = null;
     host.fallbackClearTimer = null;
-    host.requestUpdate?.();
   }, FALLBACK_TOAST_DURATION_MS);
 }
 
@@ -357,8 +353,6 @@ function handleLifecycleApprovalEvent(host: ToolStreamHost, payload: AgentEventP
     const waiting = (host.waitingApprovalStatuses ??= new Map());
     host.waitingApprovalResolvedIds?.delete(approvalId);
     waiting.set(approvalId, {
-      approvalId,
-      toolCallId: toTrimmedString(payload.data?.toolCallId),
       runId: payload.runId,
     });
     return true;

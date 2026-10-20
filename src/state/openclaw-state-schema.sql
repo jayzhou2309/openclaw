@@ -641,40 +641,6 @@ CREATE TABLE IF NOT EXISTS device_pairing_join_codes (
   expires_at_ms INTEGER
 ) STRICT;
 
-CREATE TABLE IF NOT EXISTS device_identities (
-  identity_key TEXT NOT NULL PRIMARY KEY,
-  device_id TEXT NOT NULL,
-  public_key_pem TEXT NOT NULL,
-  private_key_pem TEXT NOT NULL,
-  created_at_ms INTEGER NOT NULL,
-  updated_at_ms INTEGER NOT NULL
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_device_identities_device
-  ON device_identities(device_id, updated_at_ms DESC);
-
-CREATE TABLE IF NOT EXISTS device_auth_tokens (
-  device_id TEXT NOT NULL,
-  role TEXT NOT NULL,
-  token TEXT NOT NULL,
-  scopes_json TEXT NOT NULL,
-  updated_at_ms INTEGER NOT NULL,
-  PRIMARY KEY (device_id, role)
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_device_auth_tokens_updated
-  ON device_auth_tokens(updated_at_ms DESC, device_id, role);
-
-CREATE TABLE IF NOT EXISTS gateway_origin_device_tokens (
-  gateway_scope TEXT NOT NULL,
-  device_id TEXT NOT NULL,
-  role TEXT NOT NULL,
-  token TEXT NOT NULL,
-  scopes_json TEXT NOT NULL,
-  updated_at_ms INTEGER NOT NULL,
-  PRIMARY KEY (gateway_scope, device_id, role)
-) STRICT;
-
 CREATE TABLE IF NOT EXISTS macos_port_guardian_records (
   pid INTEGER NOT NULL PRIMARY KEY,
   port INTEGER NOT NULL,
@@ -2136,6 +2102,7 @@ CREATE TABLE IF NOT EXISTS github_repository_publication_requests (
   created_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL,
   reported_at_ms INTEGER,
+  draft INTEGER,
   CHECK ((identity_source = 'personal' AND owner_profile_id IS NOT NULL AND connection_generation IS NOT NULL)
     OR (identity_source <> 'personal' AND owner_profile_id IS NULL AND connection_generation IS NULL)),
   CHECK ((checkpoint_ref IS NULL AND checkpoint_digest IS NULL) OR (checkpoint_ref IS NOT NULL AND checkpoint_digest IS NOT NULL)),
@@ -2447,6 +2414,7 @@ CREATE TABLE IF NOT EXISTS github_publication_requests (
   created_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL,
   reported_at_ms INTEGER,
+  draft INTEGER,
   UNIQUE (session_id, idempotency_key),
   CHECK (
     (claim_id IS NULL AND run_id IS NULL AND environment_id IS NULL
@@ -2519,6 +2487,7 @@ CREATE TABLE IF NOT EXISTS github_personal_publication_requests (
   created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
   updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= created_at_ms),
   reported_at_ms INTEGER,
+  draft INTEGER,
   UNIQUE (owner_profile_id, session_id, idempotency_key),
   CHECK ((status = 'publishing' AND gateway_instance_id IS NOT NULL AND execution_id IS NOT NULL) OR status <> 'publishing'),
   CHECK ((last_effect IS NULL AND effect_state IS NULL) OR (last_effect IS NOT NULL AND effect_state IS NOT NULL)),
