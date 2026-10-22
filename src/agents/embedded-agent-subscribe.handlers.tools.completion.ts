@@ -4,12 +4,7 @@ import { projectAgentToolActivity } from "../infra/agent-activity-events.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { projectProgressCardChannelUpdate } from "../session-cards/progress-card-channel-summary.js";
-import {
-  markCollectedSessionSpawns,
-  markCollectedSessionSpawnsForRun,
-  normalizeAcceptedSessionSpawnResult,
-  readCollectedRunIds,
-} from "./accepted-session-spawn.js";
+import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
 import {
   consumeAdjustedParamsForToolCall,
   consumePreExecutionBlockedToolCall,
@@ -196,13 +191,6 @@ export async function prepareToolExecutionEnd(
       : null;
   if (acceptedSessionSpawn) {
     ctx.state.acceptedSessionSpawns.push(acceptedSessionSpawn);
-  }
-  if (toolName === "agents_wait" && !isToolError) {
-    const collectedRunIds = readCollectedRunIds(sanitizedResult);
-    markCollectedSessionSpawns(ctx.state.acceptedSessionSpawns, collectedRunIds);
-    if (ctx.params.operationalRunInstance) {
-      markCollectedSessionSpawnsForRun(ctx.params.operationalRunInstance, collectedRunIds);
-    }
   }
   ctx.state.toolMetaById.delete(toolCallId);
   ctx.state.toolSummaryById.delete(toolCallId);

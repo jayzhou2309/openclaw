@@ -13,7 +13,7 @@ export type AcceptedSessionSpawn = {
   label?: string;
   /** True only when this child owns a terminal completion for its requester. */
   expectsCompletionMessage?: boolean;
-  /** Host-recorded: this run's agents_wait returned the collector's result as done. */
+  /** Host-recorded on the run's receipt: its agents_wait returned this collector as done. */
   collected?: true;
 };
 
@@ -36,14 +36,7 @@ export function mergeAcceptedSessionSpawnsForRun(
   for (const spawn of accepted) {
     // The producer owns acceptance and completion retirement; a later harness
     // projection cannot erase acceptance or revive a cancelled obligation.
-    // Collection only adds evidence.
-    const receipt = receipts?.get(spawn.runId);
-    receipts?.set(
-      spawn.runId,
-      receipt && spawn.collected && !receipt.collected
-        ? { ...receipt, collected: true }
-        : (receipt ?? spawn),
-    );
+    receipts?.set(spawn.runId, receipts.get(spawn.runId) ?? spawn);
   }
   return receipts ? [...receipts.values()] : [];
 }
@@ -95,32 +88,7 @@ export function hasAcceptedSessionSpawn(
   return Boolean(acceptedSessionSpawns?.length);
 }
 
-/** Read the collector run IDs an agents_wait result returned as done. */
-export function readCollectedRunIds(result: unknown): string[] {
-  const completed = asOptionalRecord(asOptionalRecord(result)?.details)?.completed;
-  if (!Array.isArray(completed)) {
-    return [];
-  }
-  return completed.flatMap((entry) => {
-    const record = asOptionalRecord(entry);
-    const runId = normalizeOptionalString(record?.runId);
-    return record?.status === "done" && runId ? [runId] : [];
-  });
-}
-
-/** Mark accepted collectors whose results agents_wait returned as done. */
-export function markCollectedSessionSpawns(
-  acceptedSessionSpawns: AcceptedSessionSpawn[],
-  collectedRunIds: readonly string[],
-): void {
-  for (const [index, spawn] of acceptedSessionSpawns.entries()) {
-    if (collectedRunIds.includes(spawn.runId)) {
-      acceptedSessionSpawns[index] = { ...spawn, collected: true };
-    }
-  }
-}
-
-/** Mark collectors that an earlier attempt of this run accepted. */
+/** Record that this run's agents_wait returned these accepted collectors as done. */
 export function markCollectedSessionSpawnsForRun(
   instance: OperationalRunInstanceRef,
   collectedRunIds: readonly string[],
