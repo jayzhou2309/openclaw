@@ -49,6 +49,7 @@ import {
 } from "./enterprise-install.js";
 import { registerSlackCommonEvents, registerSlackWorkspaceEvents } from "./events.js";
 import { createSlackHttpRequestHandler, registerSlackHttpHandler } from "./http-handler.js";
+import { createSlackIdentityRecovery } from "./identity-recovery.js";
 import { createSlackDurableIngress } from "./ingress.js";
 import { createSlackMessageHandler } from "./message-handler.js";
 import { openSlackPresenceCooldownStore } from "./presence-cooldown-store.js";
@@ -298,7 +299,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
         return;
       }
       const recovered =
-        current.identityHealth.lifecycle === "blocked" ? await recoverSlackIdentity() : false;
+        current.identityHealth.lifecycle === "blocked" ? await identityRecovery.recover() : false;
       const contextTeamId = normalizeOptionalString(identity.teamId);
       const contextEnterpriseId = normalizeOptionalString(identity.enterpriseId);
       const contextInstallationIdentity =
@@ -593,92 +594,40 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
     }
   }
 
-  // Recovery otherwise runs only on socket start or inbound events, so a stable socket
-  // with no traffic would keep a transient auth.test failure forever.
-  const identityRecoveryScheduler = scheduler.scope();
-  let identityRecoveryAttempts = 0;
-  let identityRecoveryRetry: { cancel: () => void } | undefined;
-  // Cancel only stops future dispatch, so an auth.test already in flight must recheck
-  // this after it settles before publishing or rearming.
-  let transportConnected = false;
-  function scheduleSlackIdentityRecovery(err: unknown) {
-    if (
-      !transportConnected ||
-      isNonRecoverableSlackAuthError(err) ||
-      identityRecoveryScheduler.signal.aborted
-    ) {
-      return;
-    }
-    identityRecoveryAttempts += 1;
-    identityRecoveryRetry = identityRecoveryScheduler.schedule({
-      id: "identity-recovery",
-      delayMs: computeBackoff(SLACK_SOCKET_RECONNECT_POLICY, identityRecoveryAttempts),
-      run: async () => {
-        if ((await recoverSlackIdentity()) && transportConnected) {
-          publishSlackConnectedStatus(opts.setStatus, ctx.identityHealth);
-        }
-      },
-    });
-  }
-  function cancelSlackIdentityRecovery() {
-    identityRecoveryRetry?.cancel();
-    identityRecoveryRetry = undefined;
-  }
-
-  let identityRecoveryPromise: Promise<boolean> | undefined;
-  async function recoverSlackIdentity() {
-    if (ctx.identityHealth.lifecycle !== "blocked") {
-      return false;
-    }
-    if (identityRecoveryPromise) {
-      return await identityRecoveryPromise;
-    }
-    const recovery = (async () => {
-      try {
-        const auth = await createSlackStartupAuthClient(token, clientOptions).auth.test();
-        const recoveredInstallationIdentity = resolveSlackInstallationIdentity({
-          auth,
-          transportApiAppId: expectedApiAppIdFromAppToken,
-        });
-        assertSlackInstallationPolicy(recoveredInstallationIdentity);
-        const adopted = adoptSlackIdentity({
-          ctx,
-          identity: account.identity,
-          installationIdentity: recoveredInstallationIdentity,
-          botUserId: auth.user_id,
-          botId: (auth as { bot_id?: string }).bot_id,
-        });
-        if (!adopted) {
-          return false;
-        }
-        installationState.update(
-          recoveredInstallationIdentity.kind,
-          recoveredInstallationIdentity.kind === "workspace"
-            ? recoveredInstallationIdentity.teamId
-            : undefined,
-        );
-        await installSlackRuntimeForIdentity(recoveredInstallationIdentity);
-        identityRecoveryAttempts = 0;
-        cancelSlackIdentityRecovery();
-        return true;
-      } catch (err) {
-        ctx.identityHealth = {
-          lifecycle: "blocked",
-          lastError: formatSlackError(err),
-        };
-        scheduleSlackIdentityRecovery(err);
+  const identityRecovery = createSlackIdentityRecovery({
+    scheduler,
+    isBlocked: () => ctx.identityHealth.lifecycle === "blocked",
+    attempt: async () => {
+      const auth = await createSlackStartupAuthClient(token, clientOptions).auth.test();
+      const recoveredInstallationIdentity = resolveSlackInstallationIdentity({
+        auth,
+        transportApiAppId: expectedApiAppIdFromAppToken,
+      });
+      assertSlackInstallationPolicy(recoveredInstallationIdentity);
+      const adopted = adoptSlackIdentity({
+        ctx,
+        identity: account.identity,
+        installationIdentity: recoveredInstallationIdentity,
+        botUserId: auth.user_id,
+        botId: (auth as { bot_id?: string }).bot_id,
+      });
+      if (!adopted) {
         return false;
       }
-    })();
-    identityRecoveryPromise = recovery;
-    try {
-      return await recovery;
-    } finally {
-      if (identityRecoveryPromise === recovery) {
-        identityRecoveryPromise = undefined;
-      }
-    }
-  }
+      installationState.update(
+        recoveredInstallationIdentity.kind,
+        recoveredInstallationIdentity.kind === "workspace"
+          ? recoveredInstallationIdentity.teamId
+          : undefined,
+      );
+      await installSlackRuntimeForIdentity(recoveredInstallationIdentity);
+      return true;
+    },
+    onFailure: (err) => {
+      ctx.identityHealth = { lifecycle: "blocked", lastError: formatSlackError(err) };
+    },
+    onRetryRecovered: () => publishSlackConnectedStatus(opts.setStatus, ctx.identityHealth),
+  });
 
   const stopOnAbort = () => {
     if (opts.abortSignal?.aborted && slackMode === "socket") {
@@ -704,7 +653,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
         log: runtime.log,
         accountId: account.accountId,
       });
-      transportConnected = true;
+      identityRecovery.connected();
       publishSlackConnectedStatus(opts.setStatus, ctx.identityHealth);
     }
 
@@ -723,8 +672,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
             onStarted: async () => {
               reconnectAttempts = 0;
               authState.consecutiveInvalidAuth = 0;
-              transportConnected = true;
-              await recoverSlackIdentity();
+              identityRecovery.connected();
+              await identityRecovery.recover();
               publishSlackConnectedStatus(opts.setStatus, ctx.identityHealth);
               if (!hasLoggedSocketConnected) {
                 hasLoggedSocketConnected = true;
@@ -742,8 +691,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
           if (opts.abortSignal?.aborted) {
             break;
           }
-          transportConnected = false;
-          cancelSlackIdentityRecovery();
+          identityRecovery.disconnected();
           publishSlackDisconnectedStatus(opts.setStatus, disconnect.error);
 
           trackSlackAuthFailure(
@@ -823,8 +771,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
   } finally {
     installationState.release();
     runtimeStarted = false;
-    transportConnected = false;
-    await identityRecoveryScheduler.stop();
+    await identityRecovery.stop();
     presenceRequestAbort?.abort();
     await presenceMonitor?.stop();
     if (slackMode === "relay") {
