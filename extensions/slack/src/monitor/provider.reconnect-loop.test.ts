@@ -237,10 +237,7 @@ describe("slack socket reconnect loop", () => {
     await vi.advanceTimersByTimeAsync(30_000);
     expect(getSlackClient().auth.test).toHaveBeenCalledTimes(3);
 
-    const receiver = slackTestState.appConstructorArgs?.receiver as {
-      client: { emit: (event: string) => boolean };
-    };
-    receiver.client.emit("disconnected");
+    slackTestState.socketModeClient?.emit("disconnected");
     await vi.advanceTimersByTimeAsync(0);
     const disconnectedStatus = {
       connected: false,
